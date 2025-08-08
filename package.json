@@ -19,10 +19,12 @@
   "scripts": {
     "build": "tsc && shx chmod +x dist/*.js",
     "prepare": "npm run build",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "mcp-eval src/evals/evals.ts src/index.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
+    "axios": "^1.7.2",
     "mcp-evals": "^1.0.18",
     "youtube-captions-scraper": "^2.0.3"
   },

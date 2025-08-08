@@ -98,10 +98,26 @@ class YouTubeTranscriptExtractor {
 
       return this.formatTranscript(transcript);
     } catch (error) {
+      const errorMessage = (error as Error).message;
       console.error('Failed to fetch transcript:', error);
+
+      if (errorMessage.includes('Could not find captions')) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Could not find captions for language: ${lang}. The video may not have captions or the language code is incorrect.`
+        );
+      }
+
+      if (errorMessage.includes('fetch failed')) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          'Network error: Failed to fetch transcript from YouTube.'
+        );
+      }
+
       throw new McpError(
         ErrorCode.InternalError,
-        `Failed to retrieve transcript: ${(error as Error).message}`
+        `Failed to retrieve transcript: ${errorMessage}`
       );
     }
   }
