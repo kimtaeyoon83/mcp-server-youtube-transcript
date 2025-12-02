@@ -37,13 +37,15 @@ const TOOLS: Tool[] = [
       },
       required: ["url"]
     },
-    // OutputSchema helps Claude Code parse the result properly
+    // OutputSchema describes structuredContent format for Claude Code
     outputSchema: {
       type: "object",
       properties: {
-        content: {
-          type: "string"
-        }
+        content: { type: "string" },
+        requestedLanguage: { type: "string" },
+        actualLanguage: { type: "string" },
+        availableLanguages: { type: "array", items: { type: "string" } },
+        includeTimestamps: { type: "boolean" }
       },
       required: ["content"]
     }
@@ -96,7 +98,7 @@ class YouTubeTranscriptExtractor {
         return videoId;
       }
     } catch (error) {
-      // Not a URL, check if it's a direct video ID (11 chars, may start with -)
+      // Not a URL, check if it's a direct video ID (10-11 URL-safe Base64 chars, may start with -)
       if (!/^-?[a-zA-Z0-9_-]{10,11}$/.test(input)) {
         throw new McpError(
           ErrorCode.InvalidParams,
@@ -237,10 +239,10 @@ class TranscriptServer {
 
         try {
           const videoId = this.extractor.extractYoutubeId(input);
-          console.error(`Processing transcript for video: ${videoId}, lang: ${lang}, timestamps: ${include_timestamps}`);
+          console.log(`Processing transcript for video: ${videoId}, lang: ${lang}, timestamps: ${include_timestamps}`);
 
           const result = await this.extractor.getTranscript(videoId, lang, include_timestamps);
-          console.error(`Successfully extracted transcript (${result.text.length} chars, lang: ${result.actualLang})`);
+          console.log(`Successfully extracted transcript (${result.text.length} chars, lang: ${result.actualLang})`);
 
           // Add language fallback notice if different from requested
           let transcript = result.text;
@@ -255,7 +257,11 @@ class TranscriptServer {
               text: transcript
             }],
             structuredContent: {
-              content: transcript
+              content: transcript,
+              requestedLanguage: lang,
+              actualLanguage: result.actualLang,
+              availableLanguages: result.availableLanguages,
+              includeTimestamps: include_timestamps
             }
           };
         } catch (error) {
