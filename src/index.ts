@@ -16,7 +16,7 @@ import { getSubtitles } from './youtube-fetcher';
 const TOOLS: Tool[] = [
   {
     name: "get_transcript",
-    description: "Extract transcript from a YouTube video URL or ID",
+    description: "Extract transcript from a YouTube video URL or ID. Automatically falls back to available languages if requested language is not available.",
     inputSchema: {
       type: "object",
       properties: {
@@ -26,11 +26,16 @@ const TOOLS: Tool[] = [
         },
         lang: {
           type: "string",
-          description: "Language code for transcript (e.g., 'ko', 'en')",
+          description: "Language code for transcript (e.g., 'ko', 'en'). Will fall back to available language if not found.",
           default: "en"
+        },
+        include_timestamps: {
+          type: "boolean",
+          description: "Include timestamps in output (e.g., '[0:05] text'). Useful for referencing specific moments. Default: false",
+          default: false
         }
       },
-      required: ["url", "lang"]
+      required: ["url"]
     }
   }
 ];
@@ -88,14 +93,23 @@ class YouTubeTranscriptExtractor {
   /**
    * Retrieves transcript for a given video ID and language
    */
-  async getTranscript(videoId: string, lang: string): Promise<string> {
+  async getTranscript(videoId: string, lang: string, includeTimestamps: boolean): Promise<{
+    text: string;
+    actualLang: string;
+    availableLanguages: string[];
+  }> {
     try {
-      const transcript = await getSubtitles({
+      const result = await getSubtitles({
         videoID: videoId,
         lang: lang,
+        enableFallback: true,
       });
 
-      return this.formatTranscript(transcript);
+      return {
+        text: this.formatTranscript(result.lines, includeTimestamps),
+        actualLang: result.actualLang,
+        availableLanguages: result.availableLanguages.map(t => t.languageCode),
+      };
     } catch (error) {
       console.error('Failed to fetch transcript:', error);
       throw new McpError(
@@ -108,7 +122,18 @@ class YouTubeTranscriptExtractor {
   /**
    * Formats transcript lines into readable text
    */
-  private formatTranscript(transcript: TranscriptLine[]): string {
+  private formatTranscript(transcript: TranscriptLine[], includeTimestamps: boolean): string {
+    if (includeTimestamps) {
+      return transcript
+        .map(line => {
+          const mins = Math.floor(line.start / 60);
+          const secs = Math.floor(line.start % 60);
+          const timestamp = `[${mins}:${secs.toString().padStart(2, '0')}]`;
+          return `${timestamp} ${line.text.trim()}`;
+        })
+        .filter(text => text.length > 0)
+        .join('\n');
+    }
     return transcript
       .map(line => line.text.trim())
       .filter(text => text.length > 0)
@@ -167,8 +192,8 @@ class TranscriptServer {
   private async handleToolCall(name: string, args: any): Promise<{ toolResult: CallToolResult }> {
     switch (name) {
       case "get_transcript": {
-        const { url: input, lang = "en" } = args;
-        
+        const { url: input, lang = "en", include_timestamps = false } = args;
+
         if (!input || typeof input !== 'string') {
           throw new McpError(
             ErrorCode.InvalidParams,
@@ -182,14 +207,20 @@ class TranscriptServer {
             'Language code must be a string'
           );
         }
-        
+
         try {
           const videoId = this.extractor.extractYoutubeId(input);
-          console.error(`Processing transcript for video: ${videoId}`);
-          
-          const transcript = await this.extractor.getTranscript(videoId, lang);
-          console.error(`Successfully extracted transcript (${transcript.length} chars)`);
-          
+          console.error(`Processing transcript for video: ${videoId}, lang: ${lang}, timestamps: ${include_timestamps}`);
+
+          const result = await this.extractor.getTranscript(videoId, lang, include_timestamps);
+          console.error(`Successfully extracted transcript (${result.text.length} chars, lang: ${result.actualLang})`);
+
+          // Add language fallback notice if different from requested
+          let transcript = result.text;
+          if (result.actualLang !== lang) {
+            transcript = `[Note: Requested language '${lang}' not available. Using '${result.actualLang}'. Available: ${result.availableLanguages.join(', ')}]\n\n${transcript}`;
+          }
+
           return {
             toolResult: {
               content: [{
@@ -197,7 +228,10 @@ class TranscriptServer {
                 text: transcript,
                 metadata: {
                   videoId,
-                  language: lang,
+                  requestedLanguage: lang,
+                  actualLanguage: result.actualLang,
+                  availableLanguages: result.availableLanguages,
+                  includeTimestamps: include_timestamps,
                   timestamp: new Date().toISOString(),
                   charCount: transcript.length
                 }
@@ -207,11 +241,11 @@ class TranscriptServer {
           };
         } catch (error) {
           console.error('Transcript extraction failed:', error);
-          
+
           if (error instanceof McpError) {
             throw error;
           }
-          
+
           throw new McpError(
             ErrorCode.InternalError,
             `Failed to process transcript: ${(error as Error).message}`
