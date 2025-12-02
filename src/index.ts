@@ -76,7 +76,14 @@ class YouTubeTranscriptExtractor {
       } else if (url.hostname.includes('youtube.com')) {
         // Handle Shorts URLs: /shorts/{id}
         if (url.pathname.startsWith('/shorts/')) {
-          return url.pathname.slice(8); // Remove '/shorts/'
+          const id = url.pathname.slice(8); // Remove '/shorts/'
+          if (!id) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              `Invalid YouTube Shorts URL: missing video ID`
+            );
+          }
+          return id;
         }
         // Handle regular watch URLs: /watch?v={id}
         const videoId = url.searchParams.get('v');
