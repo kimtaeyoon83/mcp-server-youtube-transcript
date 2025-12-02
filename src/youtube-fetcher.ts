@@ -205,16 +205,24 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
   }
 
   // Convert to TranscriptLine format
-  return segments.map((seg: any) => {
-    const renderer = seg?.transcriptSegmentRenderer;
-    const text = renderer?.snippet?.runs?.map((r: any) => r.text || '').join('') || '';
-    const startMs = parseInt(renderer?.startMs || '0', 10);
-    const endMs = parseInt(renderer?.endMs || '0', 10);
+  return segments
+    .filter((seg: any) => seg?.transcriptSegmentRenderer) // Skip section headers
+    .map((seg: any) => {
+      const renderer = seg.transcriptSegmentRenderer;
 
-    return {
-      text: text,
-      start: startMs / 1000,
-      dur: (endMs - startMs) / 1000
-    };
-  }).filter((line: TranscriptLine) => line.text.length > 0);
+      // Handle both WEB format (snippet.runs) and ANDROID format (snippet.elementsAttributedString)
+      const webText = renderer?.snippet?.runs?.map((r: any) => r.text || '').join('');
+      const androidText = renderer?.snippet?.elementsAttributedString?.content;
+      const text = webText || androidText || '';
+
+      const startMs = parseInt(renderer?.startMs || '0', 10);
+      const endMs = parseInt(renderer?.endMs || '0', 10);
+
+      return {
+        text: text,
+        start: startMs / 1000,
+        dur: (endMs - startMs) / 1000
+      };
+    })
+    .filter((line: TranscriptLine) => line.text.length > 0);
 }
