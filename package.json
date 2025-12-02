@@ -6,8 +6,7 @@
   "author": "Freddie",
   "homepage": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
   "bugs": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript/issues",
-  "type": "module",
-  "access": "public",
+    "access": "public",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "bin": {

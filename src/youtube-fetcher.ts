@@ -141,16 +141,17 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
   // Get page data (visitor data and client version)
   const { visitorData, clientVersion } = await getPageData(videoID);
 
-  // Build request payload
+  // Build request payload using ANDROID client to avoid FAILED_PRECONDITION errors
+  // The ANDROID client bypasses YouTube's A/B test for poToken enforcement
   const params = buildParams(videoID, lang);
   const payload = JSON.stringify({
     context: {
       client: {
         hl: lang,
         gl: 'US',
-        clientName: 'WEB',
-        clientVersion: clientVersion,
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        clientName: 'ANDROID',
+        clientVersion: '19.29.37',
+        androidSdkVersion: 30,
         visitorData: visitorData
       }
     },
@@ -167,9 +168,8 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Origin': 'https://www.youtube.com',
-        'Referer': `https://www.youtube.com/watch?v=${videoID}`
+        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 11) gzip',
+        'Origin': 'https://www.youtube.com'
       }
     }, payload);
   } catch (err) {
@@ -190,16 +190,17 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
     throw new Error(`YouTube API error: ${errorMsg}`);
   }
 
-  // Extract transcript segments
-  const segments = json?.actions?.[0]?.updateEngagementPanelAction?.content
+  // Extract transcript segments - handle both WEB and ANDROID response formats
+  const webSegments = json?.actions?.[0]?.updateEngagementPanelAction?.content
     ?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body
-    ?.transcriptSegmentListRenderer?.initialSegments || [];
+    ?.transcriptSegmentListRenderer?.initialSegments;
+
+  const androidSegments = json?.actions?.[0]?.elementsCommand?.transformEntityCommand
+    ?.arguments?.transformTranscriptSegmentListArguments?.overwrite?.initialSegments;
+
+  const segments = webSegments || androidSegments || [];
 
   if (segments.length === 0) {
-    // Provide more specific error message
-    if (json?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer) {
-      throw new Error('Transcript panel found but no segments available. The video may not have captions in the requested language.');
-    }
     throw new Error('No transcript available for this video. The video may not have captions enabled.');
   }
 

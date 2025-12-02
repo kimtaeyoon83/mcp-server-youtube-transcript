@@ -10,7 +10,7 @@ import {
   Tool,
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getSubtitles } from './youtube-fetcher.js';
+import { getSubtitles } from './youtube-fetcher';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
