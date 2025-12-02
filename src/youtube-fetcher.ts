@@ -6,6 +6,28 @@ interface TranscriptLine {
   dur: number;
 }
 
+interface PageData {
+  visitorData: string;
+  clientVersion: string;
+}
+
+const REQUEST_TIMEOUT = 30000; // 30 seconds
+const DEFAULT_CLIENT_VERSION = '2.20251201.01.00';
+
+/**
+ * Encodes a number as a protobuf varint
+ * Handles lengths > 127 correctly (multi-byte encoding)
+ */
+function encodeVarint(value: number): number[] {
+  const bytes: number[] = [];
+  while (value > 0x7f) {
+    bytes.push((value & 0x7f) | 0x80);
+    value >>>= 7;
+  }
+  bytes.push(value);
+  return bytes;
+}
+
 /**
  * Builds the protobuf-encoded params for the transcript API
  */
@@ -16,7 +38,7 @@ function buildParams(videoId: string, lang: string = 'en'): string {
   // Field 3: empty string
   const innerParts: number[] = [
     0x0a, 0x03, ...Buffer.from('asr'),           // Field 1, "asr"
-    0x12, lang.length, ...Buffer.from(lang),      // Field 2, language code
+    0x12, ...encodeVarint(lang.length), ...Buffer.from(lang),  // Field 2, language code
     0x1a, 0x00                                    // Field 3, empty
   ];
   const innerBuf = Buffer.from(innerParts);
@@ -26,10 +48,10 @@ function buildParams(videoId: string, lang: string = 'en'): string {
   // Outer protobuf
   const panelName = 'engagement-panel-searchable-transcript-search-panel';
   const outerParts: number[] = [
-    0x0a, videoId.length, ...Buffer.from(videoId),      // Field 1, video ID
-    0x12, innerEncoded.length, ...Buffer.from(innerEncoded), // Field 2, language params
+    0x0a, ...encodeVarint(videoId.length), ...Buffer.from(videoId),      // Field 1, video ID
+    0x12, ...encodeVarint(innerEncoded.length), ...Buffer.from(innerEncoded), // Field 2, language params
     0x18, 0x01,                                          // Field 3, value 1
-    0x2a, panelName.length, ...Buffer.from(panelName),  // Field 5, panel name
+    0x2a, ...encodeVarint(panelName.length), ...Buffer.from(panelName),  // Field 5, panel name
     0x30, 0x01,                                          // Field 6, value 1
     0x38, 0x01,                                          // Field 7, value 1
     0x40, 0x01                                           // Field 8, value 1
@@ -40,36 +62,69 @@ function buildParams(videoId: string, lang: string = 'en'): string {
 
 /**
  * Makes an HTTPS request and returns the response body
+ * Includes timeout and HTTP status code validation
  */
 function httpsRequest(options: https.RequestOptions, data?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
+    const req = https.request({ ...options, timeout: REQUEST_TIMEOUT }, (res) => {
+      // Validate HTTP status code
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage || 'Unknown error'}`));
+        return;
+      }
+
       let body = '';
       res.on('data', chunk => body += chunk);
       res.on('end', () => resolve(body));
     });
-    req.on('error', reject);
+
+    req.on('error', (err) => {
+      reject(new Error(`Network error: ${err.message}`));
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`Request timeout after ${REQUEST_TIMEOUT}ms`));
+    });
+
     if (data) req.write(data);
     req.end();
   });
 }
 
 /**
- * Fetches the YouTube video page and extracts visitor data
+ * Fetches the YouTube video page and extracts visitor data and client version
  */
-async function getVisitorData(videoId: string): Promise<string> {
-  const html = await httpsRequest({
-    hostname: 'www.youtube.com',
-    path: `/watch?v=${videoId}`,
-    method: 'GET',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9'
-    }
-  });
+async function getPageData(videoId: string): Promise<PageData> {
+  let html: string;
 
-  const match = html.match(/"visitorData":"([^"]+)"/);
-  return match?.[1] || '';
+  try {
+    html = await httpsRequest({
+      hostname: 'www.youtube.com',
+      path: `/watch?v=${videoId}`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+      }
+    });
+  } catch (err) {
+    throw new Error(`Failed to fetch video page: ${(err as Error).message}`);
+  }
+
+  // Extract visitor data
+  const visitorMatch = html.match(/"visitorData":"([^"]+)"/);
+  const visitorData = visitorMatch?.[1] || '';
+
+  if (!visitorData) {
+    console.error(`[youtube-fetcher] Warning: Could not extract visitorData for video ${videoId}. Request may fail.`);
+  }
+
+  // Extract client version (format: "2.YYYYMMDD.XX.XX")
+  const versionMatch = html.match(/"clientVersion":"([\d.]+)"/);
+  const clientVersion = versionMatch?.[1] || DEFAULT_CLIENT_VERSION;
+
+  return { visitorData, clientVersion };
 }
 
 /**
@@ -78,8 +133,13 @@ async function getVisitorData(videoId: string): Promise<string> {
 export async function getSubtitles(options: { videoID: string; lang?: string }): Promise<TranscriptLine[]> {
   const { videoID, lang = 'en' } = options;
 
-  // Get visitor data from video page
-  const visitorData = await getVisitorData(videoID);
+  // Validate video ID format
+  if (!videoID || typeof videoID !== 'string') {
+    throw new Error('Invalid video ID: must be a non-empty string');
+  }
+
+  // Get page data (visitor data and client version)
+  const { visitorData, clientVersion } = await getPageData(videoID);
 
   // Build request payload
   const params = buildParams(videoID, lang);
@@ -89,7 +149,7 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
         hl: lang,
         gl: 'US',
         clientName: 'WEB',
-        clientVersion: '2.20251201.01.00',
+        clientVersion: clientVersion,
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         visitorData: visitorData
       }
@@ -98,24 +158,36 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
   });
 
   // Make API request
-  const response = await httpsRequest({
-    hostname: 'www.youtube.com',
-    path: '/youtubei/v1/get_transcript?prettyPrint=false',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload),
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Origin': 'https://www.youtube.com',
-      'Referer': `https://www.youtube.com/watch?v=${videoID}`
-    }
-  }, payload);
+  let response: string;
+  try {
+    response = await httpsRequest({
+      hostname: 'www.youtube.com',
+      path: '/youtubei/v1/get_transcript?prettyPrint=false',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://www.youtube.com',
+        'Referer': `https://www.youtube.com/watch?v=${videoID}`
+      }
+    }, payload);
+  } catch (err) {
+    throw new Error(`Failed to fetch transcript API: ${(err as Error).message}`);
+  }
 
-  // Parse response
-  const json = JSON.parse(response);
+  // Parse response with error handling
+  let json: any;
+  try {
+    json = JSON.parse(response);
+  } catch (err) {
+    throw new Error(`Failed to parse YouTube API response: ${(err as Error).message}. Response preview: ${response.substring(0, 200)}`);
+  }
 
+  // Check for API-level errors
   if (json.error) {
-    throw new Error(`YouTube API error: ${json.error.message}`);
+    const errorMsg = json.error.message || json.error.code || 'Unknown API error';
+    throw new Error(`YouTube API error: ${errorMsg}`);
   }
 
   // Extract transcript segments
@@ -124,7 +196,11 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
     ?.transcriptSegmentListRenderer?.initialSegments || [];
 
   if (segments.length === 0) {
-    throw new Error('No transcript available for this video');
+    // Provide more specific error message
+    if (json?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer) {
+      throw new Error('Transcript panel found but no segments available. The video may not have captions in the requested language.');
+    }
+    throw new Error('No transcript available for this video. The video may not have captions enabled.');
   }
 
   // Convert to TranscriptLine format
