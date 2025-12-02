@@ -141,9 +141,14 @@ class YouTubeTranscriptExtractor {
     if (includeTimestamps) {
       return transcript
         .map(line => {
-          const mins = Math.floor(line.start / 60);
-          const secs = Math.floor(line.start % 60);
-          const timestamp = `[${mins}:${secs.toString().padStart(2, '0')}]`;
+          const totalSeconds = Math.floor(line.start);
+          const hours = Math.floor(totalSeconds / 3600);
+          const mins = Math.floor((totalSeconds % 3600) / 60);
+          const secs = totalSeconds % 60;
+          // Use h:mm:ss for videos > 1 hour, mm:ss otherwise
+          const timestamp = hours > 0
+            ? `[${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`
+            : `[${mins}:${secs.toString().padStart(2, '0')}]`;
           return `${timestamp} ${line.text.trim()}`;
         })
         .filter(text => text.length > 0)
