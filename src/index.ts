@@ -64,6 +64,11 @@ class YouTubeTranscriptExtractor {
       if (url.hostname === 'youtu.be') {
         return url.pathname.slice(1);
       } else if (url.hostname.includes('youtube.com')) {
+        // Handle Shorts URLs: /shorts/{id}
+        if (url.pathname.startsWith('/shorts/')) {
+          return url.pathname.slice(8); // Remove '/shorts/'
+        }
+        // Handle regular watch URLs: /watch?v={id}
         const videoId = url.searchParams.get('v');
         if (!videoId) {
           throw new McpError(
@@ -74,8 +79,8 @@ class YouTubeTranscriptExtractor {
         return videoId;
       }
     } catch (error) {
-      // Not a URL, check if it's a direct video ID
-      if (!/^[a-zA-Z0-9_-]{11}$/.test(input)) {
+      // Not a URL, check if it's a direct video ID (11 chars, may start with -)
+      if (!/^-?[a-zA-Z0-9_-]{10,11}$/.test(input)) {
         throw new McpError(
           ErrorCode.InvalidParams,
           `Invalid YouTube video ID: ${input}`
