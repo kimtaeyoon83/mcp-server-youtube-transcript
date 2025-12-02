@@ -12,7 +12,13 @@ interface PageData {
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
-const DEFAULT_CLIENT_VERSION = '2.20251201.01.00';
+
+// TODO: These versions may need periodic updates if YouTube starts rejecting old clients
+// The ANDROID client is used to bypass YouTube's poToken A/B test enforcement
+const ANDROID_CLIENT_VERSION = '19.29.37';
+const ANDROID_USER_AGENT = `com.google.android.youtube/${ANDROID_CLIENT_VERSION} (Linux; U; Android 11) gzip`;
+const WEB_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DEFAULT_CLIENT_VERSION = '2.20251201.01.00'; // Fallback if not extracted from page
 
 /**
  * Encodes a number as a protobuf varint
@@ -104,7 +110,7 @@ async function getPageData(videoId: string): Promise<PageData> {
       path: `/watch?v=${videoId}`,
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': WEB_USER_AGENT,
         'Accept-Language': 'en-US,en;q=0.9'
       }
     });
@@ -138,8 +144,8 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
     throw new Error('Invalid video ID: must be a non-empty string');
   }
 
-  // Get page data (visitor data and client version)
-  const { visitorData, clientVersion } = await getPageData(videoID);
+  // Get page data (visitor data needed for API authentication)
+  const { visitorData } = await getPageData(videoID);
 
   // Build request payload using ANDROID client to avoid FAILED_PRECONDITION errors
   // The ANDROID client bypasses YouTube's A/B test for poToken enforcement
@@ -150,7 +156,7 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
         hl: lang,
         gl: 'US',
         clientName: 'ANDROID',
-        clientVersion: '19.29.37',
+        clientVersion: ANDROID_CLIENT_VERSION,
         androidSdkVersion: 30,
         visitorData: visitorData
       }
@@ -168,7 +174,7 @@ export async function getSubtitles(options: { videoID: string; lang?: string }):
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 11) gzip',
+        'User-Agent': ANDROID_USER_AGENT,
         'Origin': 'https://www.youtube.com'
       }
     }, payload);
