@@ -23,8 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
-    "mcp-evals": "^1.0.18",
-    "youtube-captions-scraper": "^2.0.3"
+    "mcp-evals": "^1.0.18"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
