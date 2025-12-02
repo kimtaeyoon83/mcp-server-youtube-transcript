@@ -36,8 +36,18 @@ const TOOLS: Tool[] = [
         }
       },
       required: ["url"]
+    },
+    // OutputSchema helps Claude Code parse the result properly
+    outputSchema: {
+      type: "object",
+      properties: {
+        content: {
+          type: "string"
+        }
+      },
+      required: ["content"]
     }
-  }
+  } as Tool
 ];
 
 interface TranscriptLine {
@@ -194,7 +204,7 @@ class TranscriptServer {
   /**
    * Handles tool call requests
    */
-  private async handleToolCall(name: string, args: any): Promise<{ toolResult: CallToolResult }> {
+  private async handleToolCall(name: string, args: any): Promise<CallToolResult> {
     switch (name) {
       case "get_transcript": {
         const { url: input, lang = "en", include_timestamps = false } = args;
@@ -226,22 +236,14 @@ class TranscriptServer {
             transcript = `[Note: Requested language '${lang}' not available. Using '${result.actualLang}'. Available: ${result.availableLanguages.join(', ')}]\n\n${transcript}`;
           }
 
+          // Claude Code v2.0.21+ needs structuredContent for proper display
           return {
-            toolResult: {
-              content: [{
-                type: "text",
-                text: transcript,
-                metadata: {
-                  videoId,
-                  requestedLanguage: lang,
-                  actualLanguage: result.actualLang,
-                  availableLanguages: result.availableLanguages,
-                  includeTimestamps: include_timestamps,
-                  timestamp: new Date().toISOString(),
-                  charCount: transcript.length
-                }
-              }],
-              isError: false
+            content: [{
+              type: "text" as const,
+              text: transcript
+            }],
+            structuredContent: {
+              content: transcript
             }
           };
         } catch (error) {
