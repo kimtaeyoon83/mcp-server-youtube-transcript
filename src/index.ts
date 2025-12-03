@@ -10,7 +10,7 @@ import {
   Tool,
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getSubtitles, AdChapter } from './youtube-fetcher';
+import { getSubtitles } from './youtube-fetcher';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
@@ -52,7 +52,8 @@ const TOOLS: Tool[] = [
         availableLanguages: { type: "array", items: { type: "string" } },
         includeTimestamps: { type: "boolean" },
         stripAds: { type: "boolean" },
-        adsStripped: { type: "number", description: "Number of transcript lines filtered as sponsored content" }
+        adsStripped: { type: "number", description: "Number of transcript lines filtered as sponsored content" },
+        adChaptersFound: { type: "number", description: "Number of ad chapters detected in video" }
       },
       required: ["content"]
     }
@@ -304,7 +305,8 @@ class TranscriptServer {
               availableLanguages: result.availableLanguages,
               includeTimestamps: include_timestamps,
               stripAds: strip_ads,
-              adsStripped: result.adsStripped
+              adsStripped: result.adsStripped,
+              adChaptersFound: result.adChaptersFound
             }
           };
         } catch (error) {
