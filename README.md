@@ -27,7 +27,7 @@ npx -y @smithery/cli install @kimtaeyoon83/mcp-server-youtube-transcript --clien
     - `url` (string, required): YouTube video URL, Shorts URL, or video ID
     - `lang` (string, optional, default: "en"): Language code for transcript (e.g., 'ko', 'en'). Automatically falls back to available languages if requested language is not found.
     - `include_timestamps` (boolean, optional, default: false): Include timestamps in output (e.g., '[0:05] text')
-    - `strip_ads` (boolean, optional, default: true): Prepend instruction to remove sponsorships, ads, and promotional content from transcript
+    - `strip_ads` (boolean, optional, default: true): Filter out sponsorships, ads, and promotional content from transcript based on chapter markers
 
 ## Key Features
 
