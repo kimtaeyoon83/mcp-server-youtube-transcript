@@ -33,6 +33,11 @@ const TOOLS: Tool[] = [
           type: "boolean",
           description: "Include timestamps in output (e.g., '[0:05] text'). Useful for referencing specific moments. Default: false",
           default: false
+        },
+        strip_ads: {
+          type: "boolean",
+          description: "Prepend instruction to remove sponsorships, ads, and promotional content from transcript. Default: true",
+          default: true
         }
       },
       required: ["url"]
@@ -45,7 +50,8 @@ const TOOLS: Tool[] = [
         requestedLanguage: { type: "string" },
         actualLanguage: { type: "string" },
         availableLanguages: { type: "array", items: { type: "string" } },
-        includeTimestamps: { type: "boolean" }
+        includeTimestamps: { type: "boolean" },
+        stripAds: { type: "boolean" }
       },
       required: ["content"]
     }
@@ -221,7 +227,7 @@ class TranscriptServer {
   private async handleToolCall(name: string, args: any): Promise<CallToolResult> {
     switch (name) {
       case "get_transcript": {
-        const { url: input, lang = "en", include_timestamps = false } = args;
+        const { url: input, lang = "en", include_timestamps = false, strip_ads = true } = args;
 
         if (!input || typeof input !== 'string') {
           throw new McpError(
@@ -239,7 +245,7 @@ class TranscriptServer {
 
         try {
           const videoId = this.extractor.extractYoutubeId(input);
-          console.log(`Processing transcript for video: ${videoId}, lang: ${lang}, timestamps: ${include_timestamps}`);
+          console.log(`Processing transcript for video: ${videoId}, lang: ${lang}, timestamps: ${include_timestamps}, strip_ads: ${strip_ads}`);
 
           const result = await this.extractor.getTranscript(videoId, lang, include_timestamps);
           console.log(`Successfully extracted transcript (${result.text.length} chars, lang: ${result.actualLang})`);
@@ -248,6 +254,11 @@ class TranscriptServer {
           let transcript = result.text;
           if (result.actualLang !== lang) {
             transcript = `[Note: Requested language '${lang}' not available. Using '${result.actualLang}'. Available: ${result.availableLanguages.join(', ')}]\n\n${transcript}`;
+          }
+
+          // Prepend ad-stripping instruction if requested
+          if (strip_ads) {
+            transcript = `[Instruction: Remove any mention of sponsorships, ads, or promotional content from the following transcript]\n\n${transcript}`;
           }
 
           // Claude Code v2.0.21+ needs structuredContent for proper display
@@ -261,7 +272,8 @@ class TranscriptServer {
               requestedLanguage: lang,
               actualLanguage: result.actualLang,
               availableLanguages: result.availableLanguages,
-              includeTimestamps: include_timestamps
+              includeTimestamps: include_timestamps,
+              stripAds: strip_ads
             }
           };
         } catch (error) {
