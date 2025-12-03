@@ -6,7 +6,6 @@
   "author": "Freddie",
   "homepage": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
   "bugs": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript/issues",
-  "type": "module",
   "access": "public",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -23,8 +22,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
-    "mcp-evals": "^1.0.18",
-    "youtube-captions-scraper": "^2.0.3"
+    "mcp-evals": "^1.0.18"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
