@@ -24,13 +24,18 @@ npx -y @smithery/cli install @kimtaeyoon83/mcp-server-youtube-transcript --clien
 - **get_transcript**
   - Extract transcripts from YouTube videos
   - Inputs:
-    - `url` (string, required): YouTube video URL or video ID
-    - `lang` (string, optional, default: "en"): Language code for transcript (e.g., 'ko', 'en')
+    - `url` (string, required): YouTube video URL, Shorts URL, or video ID
+    - `lang` (string, optional, default: "en"): Language code for transcript (e.g., 'ko', 'en'). Automatically falls back to available languages if requested language is not found.
+    - `include_timestamps` (boolean, optional, default: false): Include timestamps in output (e.g., '[0:05] text')
+    - `strip_ads` (boolean, optional, default: true): Filter out sponsorships, ads, and promotional content from transcript based on chapter markers
 
 ## Key Features
 
-- Support for multiple video URL formats
-- Language-specific transcript retrieval
+- Support for multiple video URL formats (including YouTube Shorts)
+- Language-specific transcript retrieval with automatic fallback
+- Optional timestamps for referencing specific moments
+- Built-in ad/sponsorship filtering (enabled by default)
+- Zero external dependencies for transcript fetching
 - Detailed metadata in responses
 
 ## Configuration
@@ -132,7 +137,30 @@ await server.callTool("get_transcript", {
 });
 ```
 
-3. How to Extract YouTube Subtitles in Claude Desktop App
+3. Get transcript from YouTube Shorts:
+```typescript
+await server.callTool("get_transcript", {
+  url: "https://www.youtube.com/shorts/VIDEO_ID"
+});
+```
+
+4. Get transcript with timestamps:
+```typescript
+await server.callTool("get_transcript", {
+  url: "VIDEO_ID",
+  include_timestamps: true
+});
+```
+
+5. Get raw transcript without ad filtering:
+```typescript
+await server.callTool("get_transcript", {
+  url: "VIDEO_ID",
+  strip_ads: false
+});
+```
+
+6. How to Extract YouTube Subtitles in Claude Desktop App
 ```
 chat: https://youtu.be/ODaHJzOyVCQ?si=aXkJgso96Deri0aB Extract subtitles
 ```
