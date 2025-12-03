@@ -36,7 +36,7 @@ const TOOLS: Tool[] = [
         },
         strip_ads: {
           type: "boolean",
-          description: "Prepend instruction to remove sponsorships, ads, and promotional content from transcript. Default: true",
+          description: "Filter out sponsored segments from transcript based on chapter markers (e.g., chapters marked as 'Werbung', 'Ad', 'Sponsor'). Default: true",
           default: true
         }
       },
@@ -51,7 +51,9 @@ const TOOLS: Tool[] = [
         actualLanguage: { type: "string" },
         availableLanguages: { type: "array", items: { type: "string" } },
         includeTimestamps: { type: "boolean" },
-        stripAds: { type: "boolean" }
+        stripAds: { type: "boolean" },
+        adsStripped: { type: "number", description: "Number of transcript lines filtered as sponsored content" },
+        adChaptersFound: { type: "number", description: "Number of ad chapters detected in video" }
       },
       required: ["content"]
     }
@@ -123,10 +125,12 @@ class YouTubeTranscriptExtractor {
   /**
    * Retrieves transcript for a given video ID and language
    */
-  async getTranscript(videoId: string, lang: string, includeTimestamps: boolean): Promise<{
+  async getTranscript(videoId: string, lang: string, includeTimestamps: boolean, stripAds: boolean): Promise<{
     text: string;
     actualLang: string;
     availableLanguages: string[];
+    adsStripped: number;
+    adChaptersFound: number;
   }> {
     try {
       const result = await getSubtitles({
@@ -135,10 +139,31 @@ class YouTubeTranscriptExtractor {
         enableFallback: true,
       });
 
+      let lines = result.lines;
+      let adsStripped = 0;
+
+      // Filter out lines that fall within ad chapters
+      if (stripAds && result.adChapters.length > 0) {
+        const originalCount = lines.length;
+        lines = lines.filter(line => {
+          const lineStartMs = line.start * 1000;
+          // Check if this line falls within any ad chapter
+          return !result.adChapters.some(ad =>
+            lineStartMs >= ad.startMs && lineStartMs < ad.endMs
+          );
+        });
+        adsStripped = originalCount - lines.length;
+        if (adsStripped > 0) {
+          console.log(`[youtube-transcript] Filtered ${adsStripped} lines from ${result.adChapters.length} ad chapter(s): ${result.adChapters.map(a => a.title).join(', ')}`);
+        }
+      }
+
       return {
-        text: this.formatTranscript(result.lines, includeTimestamps),
+        text: this.formatTranscript(lines, includeTimestamps),
         actualLang: result.actualLang,
         availableLanguages: result.availableLanguages.map(t => t.languageCode),
+        adsStripped,
+        adChaptersFound: result.adChapters.length
       };
     } catch (error) {
       console.error('Failed to fetch transcript:', error);
@@ -247,18 +272,24 @@ class TranscriptServer {
           const videoId = this.extractor.extractYoutubeId(input);
           console.log(`Processing transcript for video: ${videoId}, lang: ${lang}, timestamps: ${include_timestamps}, strip_ads: ${strip_ads}`);
 
-          const result = await this.extractor.getTranscript(videoId, lang, include_timestamps);
-          console.log(`Successfully extracted transcript (${result.text.length} chars, lang: ${result.actualLang})`);
+          const result = await this.extractor.getTranscript(videoId, lang, include_timestamps, strip_ads);
+          console.log(`Successfully extracted transcript (${result.text.length} chars, lang: ${result.actualLang}, ads stripped: ${result.adsStripped})`);
+
+          // Build transcript with notes
+          let transcript = result.text;
 
           // Add language fallback notice if different from requested
-          let transcript = result.text;
           if (result.actualLang !== lang) {
             transcript = `[Note: Requested language '${lang}' not available. Using '${result.actualLang}'. Available: ${result.availableLanguages.join(', ')}]\n\n${transcript}`;
           }
 
-          // Prepend ad-stripping instruction if requested
-          if (strip_ads) {
-            transcript = `[Instruction: Remove any mention of sponsorships, ads, or promotional content from the following transcript]\n\n${transcript}`;
+          // Add ad filtering notice based on what happened
+          if (result.adsStripped > 0) {
+            // Ads were filtered by chapter markers
+            transcript = `[Note: ${result.adsStripped} sponsored segment lines filtered out based on chapter markers]\n\n${transcript}`;
+          } else if (strip_ads && result.adChaptersFound === 0) {
+            // No chapter markers found - add prompt hint as fallback
+            transcript += '\n\n[Note: No chapter markers found. If summarizing, please exclude any sponsored segments or ads from the summary.]';
           }
 
           // Claude Code v2.0.21+ needs structuredContent for proper display
@@ -273,7 +304,9 @@ class TranscriptServer {
               actualLanguage: result.actualLang,
               availableLanguages: result.availableLanguages,
               includeTimestamps: include_timestamps,
-              stripAds: strip_ads
+              stripAds: strip_ads,
+              adsStripped: result.adsStripped,
+              adChaptersFound: result.adChaptersFound
             }
           };
         } catch (error) {
