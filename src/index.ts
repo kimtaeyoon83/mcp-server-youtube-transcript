@@ -46,14 +46,8 @@ const TOOLS: Tool[] = [
     outputSchema: {
       type: "object",
       properties: {
-        content: { type: "string" },
-        requestedLanguage: { type: "string" },
-        actualLanguage: { type: "string" },
-        availableLanguages: { type: "array", items: { type: "string" } },
-        includeTimestamps: { type: "boolean" },
-        stripAds: { type: "boolean" },
-        adsStripped: { type: "number", description: "Number of transcript lines filtered as sponsored content" },
-        adChaptersFound: { type: "number", description: "Number of ad chapters detected in video" }
+        meta: { type: "string", description: "Title | Author | Subs | Views | Date" },
+        content: { type: "string" }
       },
       required: ["content"]
     }
@@ -131,6 +125,13 @@ class YouTubeTranscriptExtractor {
     availableLanguages: string[];
     adsStripped: number;
     adChaptersFound: number;
+    metadata: {
+      title: string;
+      author: string;
+      subscriberCount: string;
+      viewCount: string;
+      publishDate: string;
+    };
   }> {
     try {
       const result = await getSubtitles({
@@ -163,7 +164,8 @@ class YouTubeTranscriptExtractor {
         actualLang: result.actualLang,
         availableLanguages: result.availableLanguages.map(t => t.languageCode),
         adsStripped,
-        adChaptersFound: result.adChapters.length
+        adChaptersFound: result.adChapters.length,
+        metadata: result.metadata
       };
     } catch (error) {
       console.error('Failed to fetch transcript:', error);
@@ -299,14 +301,8 @@ class TranscriptServer {
               text: transcript
             }],
             structuredContent: {
-              content: transcript,
-              requestedLanguage: lang,
-              actualLanguage: result.actualLang,
-              availableLanguages: result.availableLanguages,
-              includeTimestamps: include_timestamps,
-              stripAds: strip_ads,
-              adsStripped: result.adsStripped,
-              adChaptersFound: result.adChaptersFound
+              meta: `${result.metadata.title} | ${result.metadata.author} | ${result.metadata.subscriberCount} subs | ${result.metadata.viewCount} views | ${result.metadata.publishDate}`,
+              content: transcript.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ')
             }
           };
         } catch (error) {

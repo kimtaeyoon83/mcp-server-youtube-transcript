@@ -18,11 +18,20 @@ export interface AdChapter {
   endMs: number;
 }
 
+export interface VideoMetadata {
+  title: string;
+  author: string;
+  subscriberCount: string;
+  viewCount: string;
+  publishDate: string;
+}
+
 interface PageData {
   visitorData: string;
   clientVersion: string;
   availableLanguages: CaptionTrack[];
   adChapters: AdChapter[];
+  metadata: VideoMetadata;
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
@@ -202,7 +211,38 @@ async function getPageData(videoId: string): Promise<PageData> {
     }
   }
 
-  return { visitorData, clientVersion, availableLanguages, adChapters };
+  // Extract video metadata (target videoDetails block, use .*? for nested objects)
+  const titleMatch = html.match(/"videoDetails":\{.*?"title":"([^"]+)"/);
+  const authorMatch = html.match(/"videoDetails":\{.*?"author":"([^"]+)"/);
+  const subsMatch = html.match(/"subscriberCountText":\{"accessibility":\{"accessibilityData":\{"label":"([^"]+)"/);
+  const viewsMatch = html.match(/"viewCount":"(\d+)"/);
+  const dateMatch = html.match(/"publishDate":"([^"]+)"/);
+
+  // Shorten subscriber count: "649 thousand subscribers" → "649k"
+  let subs = subsMatch?.[1] || '';
+  subs = subs.replace(/ subscribers?/i, '').replace(/ thousand/i, 'k').replace(/ million/i, 'M').replace(/ billion/i, 'B');
+
+  // Format view count: 22205 → "22.2k" (explicit NaN handling)
+  const views = viewsMatch?.[1] || '';
+  const viewNum = parseInt(views, 10);
+  const viewsFormatted = Number.isNaN(viewNum) ? ''
+    : viewNum >= 1_000_000 ? (viewNum / 1_000_000).toFixed(1) + 'M'
+    : viewNum >= 1_000 ? (viewNum / 1_000).toFixed(1) + 'k'
+    : views;
+
+  // Shorten date: "2025-12-03T03:01:16-08:00" → "2025-12-03"
+  const dateRaw = dateMatch?.[1] || '';
+  const dateShort = dateRaw.split('T')[0];
+
+  const metadata: VideoMetadata = {
+    title: titleMatch?.[1] || '',
+    author: authorMatch?.[1] || '',
+    subscriberCount: subs,
+    viewCount: viewsFormatted,
+    publishDate: dateShort
+  };
+
+  return { visitorData, clientVersion, availableLanguages, adChapters, metadata };
 }
 
 export interface SubtitleResult {
@@ -211,6 +251,7 @@ export interface SubtitleResult {
   actualLang: string;
   availableLanguages: CaptionTrack[];
   adChapters: AdChapter[];
+  metadata: VideoMetadata;
 }
 
 /**
@@ -242,7 +283,7 @@ export async function getSubtitles(options: {
   }
 
   // Get page data (visitor data needed for API authentication)
-  const { visitorData, availableLanguages, adChapters } = await getPageData(videoID);
+  const { visitorData, availableLanguages, adChapters, metadata } = await getPageData(videoID);
 
   // Determine which language to use
   let targetLang = lang;
@@ -356,6 +397,7 @@ export async function getSubtitles(options: {
     requestedLang: lang,
     actualLang: targetLang,
     availableLanguages,
-    adChapters
+    adChapters,
+    metadata
   };
 }
