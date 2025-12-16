@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm install --ignore-scripts
 
 # Copy the rest of the application
 COPY . .
@@ -27,7 +27,7 @@ COPY --from=builder /app/dist /app/dist
 COPY --from=builder /app/package.json /app/package-lock.json /app/
 
 # Install production dependencies only
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 # Specify the default command
 ENTRYPOINT ["node", "dist/index.js"]
