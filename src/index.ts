@@ -10,7 +10,7 @@ import {
   Tool,
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getSubtitles } from './youtube-fetcher';
+import { getSubtitles, AdChapter, CaptionTrack } from './youtube-fetcher.js';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
@@ -50,8 +50,13 @@ const TOOLS: Tool[] = [
         content: { type: "string" }
       },
       required: ["content"]
-    }
-  } as Tool
+    },
+    annotations: {
+      title: "Get Transcript",
+      readOnlyHint: true,
+      openWorldHint: true,
+    },
+  },
 ];
 
 interface TranscriptLine {
@@ -149,20 +154,20 @@ class YouTubeTranscriptExtractor {
         lines = lines.filter(line => {
           const lineStartMs = line.start * 1000;
           // Check if this line falls within any ad chapter
-          return !result.adChapters.some(ad =>
+          return !result.adChapters.some((ad: AdChapter) =>
             lineStartMs >= ad.startMs && lineStartMs < ad.endMs
           );
         });
         adsStripped = originalCount - lines.length;
         if (adsStripped > 0) {
-          console.log(`[youtube-transcript] Filtered ${adsStripped} lines from ${result.adChapters.length} ad chapter(s): ${result.adChapters.map(a => a.title).join(', ')}`);
+          console.log(`[youtube-transcript] Filtered ${adsStripped} lines from ${result.adChapters.length} ad chapter(s): ${result.adChapters.map((a: AdChapter) => a.title).join(', ')}`);
         }
       }
 
       return {
         text: this.formatTranscript(lines, includeTimestamps),
         actualLang: result.actualLang,
-        availableLanguages: result.availableLanguages.map(t => t.languageCode),
+        availableLanguages: result.availableLanguages.map((t: CaptionTrack) => t.languageCode),
         adsStripped,
         adChaptersFound: result.adChapters.length,
         metadata: result.metadata
