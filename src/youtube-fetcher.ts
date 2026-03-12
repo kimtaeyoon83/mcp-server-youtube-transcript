@@ -1,5 +1,6 @@
 import { existsSync } from 'fs';
 import https from 'https';
+import { delimiter, join } from 'path';
 import puppeteer, { Browser } from 'puppeteer-core';
 
 interface TranscriptLine {
@@ -41,15 +42,7 @@ interface TranscriptSegment {
 
 const REQUEST_TIMEOUT = 30000;
 const WATCH_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
-const CHROME_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  process.env.CHROME_PATH,
-  process.env.GOOGLE_CHROME_BIN,
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium'
-].filter((value): value is string => Boolean(value));
+const CHROME_COMMAND_CANDIDATES = ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium', 'chrome', 'chrome.exe'];
 
 let browserPromise: Promise<Browser> | null = null;
 
@@ -65,8 +58,100 @@ function uniqueLanguageCodes(tracks: CaptionTrack[]): CaptionTrack[] {
   });
 }
 
+function getChromeCandidates(): string[] {
+  const pathCandidates = (process.env.PATH ?? '')
+    .split(delimiter)
+    .filter(Boolean)
+    .flatMap((directory) => CHROME_COMMAND_CANDIDATES.map((command) => join(directory, command)));
+
+  const macCandidates = [
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium'
+  ];
+
+  const windowsBasePaths = [
+    process.env.LOCALAPPDATA,
+    process.env.PROGRAMFILES,
+    process.env['PROGRAMFILES(X86)']
+  ].filter((value): value is string => Boolean(value));
+
+  const windowsCandidates = windowsBasePaths.map((basePath) => join(basePath, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+
+  return [...new Set([
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    process.env.CHROME_PATH,
+    process.env.GOOGLE_CHROME_BIN,
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium',
+    ...macCandidates,
+    ...windowsCandidates,
+    ...pathCandidates
+  ].filter((value): value is string => Boolean(value)))];
+}
+
+function shouldDisableSandbox(): boolean {
+  const value = process.env.PUPPETEER_DISABLE_SANDBOX?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function extractStructuredValue(source: string, marker: string): string | null {
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  let startIndex = markerIndex + marker.length;
+  while (startIndex < source.length && /\s/.test(source[startIndex])) {
+    startIndex += 1;
+  }
+
+  const openingChar = source[startIndex];
+  const closingChar = openingChar === '[' ? ']' : openingChar === '{' ? '}' : null;
+  if (!closingChar) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let isEscaped = false;
+
+  for (let index = startIndex; index < source.length; index++) {
+    const char = source[index];
+
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (char === '\\') {
+        isEscaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === openingChar) {
+      depth += 1;
+    } else if (char === closingChar) {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
 function resolveChromeExecutablePath(): string {
-  const executablePath = CHROME_CANDIDATES.find((candidate) => existsSync(candidate));
+  const executablePath = getChromeCandidates().find((candidate) => existsSync(candidate));
   if (!executablePath) {
     throw new Error('Could not find a Chrome or Chromium executable. Set CHROME_PATH or PUPPETEER_EXECUTABLE_PATH.');
   }
@@ -78,7 +163,10 @@ async function getBrowser(): Promise<Browser> {
     browserPromise = puppeteer.launch({
       executablePath: resolveChromeExecutablePath(),
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: shouldDisableSandbox() ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
+    }).catch((error) => {
+      browserPromise = null;
+      throw error;
     });
   }
   return browserPromise;
@@ -88,22 +176,16 @@ async function closeBrowser(): Promise<void> {
   if (!browserPromise) {
     return;
   }
-  const browser = await browserPromise;
+
+  const currentBrowserPromise = browserPromise;
   browserPromise = null;
+  const browser = await currentBrowserPromise;
   await browser.close();
 }
 
 export async function shutdownFetcher(): Promise<void> {
   await closeBrowser();
 }
-
-process.once('exit', () => {
-  void closeBrowser();
-});
-
-process.once('SIGTERM', () => {
-  void closeBrowser();
-});
 
 function httpsRequest(options: https.RequestOptions): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -134,13 +216,13 @@ function httpsRequest(options: https.RequestOptions): Promise<string> {
 }
 
 function parseCaptionTracks(html: string): CaptionTrack[] {
-  const match = html.match(/"captionTracks":(\[[\s\S]*?\])[,}]/);
-  if (!match) {
+  const serializedTracks = extractStructuredValue(html, '"captionTracks":');
+  if (!serializedTracks) {
     return [];
   }
 
   try {
-    const tracks = JSON.parse(match[1]);
+    const tracks = JSON.parse(serializedTracks);
     return uniqueLanguageCodes(
       tracks
         .filter((track: any) => Boolean(track?.languageCode))
