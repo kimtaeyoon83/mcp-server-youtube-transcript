@@ -10,7 +10,7 @@ import {
   Tool,
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getSubtitles, AdChapter, CaptionTrack } from './youtube-fetcher.js';
+import { getSubtitles, AdChapter, CaptionTrack, shutdownFetcher } from './youtube-fetcher.js';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
@@ -345,6 +345,7 @@ class TranscriptServer {
    */
   async stop(): Promise<void> {
     try {
+      await shutdownFetcher();
       await this.server.close();
     } catch (error) {
       console.error('Error while stopping server:', error);
