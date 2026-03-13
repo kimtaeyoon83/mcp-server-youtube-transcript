@@ -331,9 +331,14 @@ function normalizeLanguageCode(languageCode: string): string {
   return languageCode.trim().toLowerCase();
 }
 
+function createDescriptiveError(message: string, cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new Error(`${message}${detail ? ` (${detail})` : ''}`, { cause });
+}
+
 function selectLanguage(availableLanguages: CaptionTrack[], requestedLanguage: string, enableFallback: boolean): string {
   if (availableLanguages.length === 0) {
-    return requestedLanguage;
+    throw new Error('No caption tracks available for this video in any language.');
   }
 
   const normalizedRequested = normalizeLanguageCode(requestedLanguage);
@@ -415,6 +420,9 @@ async function scrollTranscriptPanel(page: import('puppeteer-core').Page): Promi
 async function fetchTranscriptSegments(videoId: string, languageCode: string): Promise<TranscriptSegment[]> {
   const browser = await getBrowser();
   const page = await browser.newPage();
+  const transcriptButtonSelector = 'ytd-video-description-transcript-section-renderer button';
+  const transcriptPanelSelector = 'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"]';
+  const transcriptSegmentSelector = `${transcriptPanelSelector} .ytwTranscriptSegmentViewModelHost`;
 
   try {
     await page.setViewport({ width: 1400, height: 2200 });
@@ -426,22 +434,37 @@ async function fetchTranscriptSegments(videoId: string, languageCode: string): P
     const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=${encodeURIComponent(languageCode)}&persist_hl=1`;
     await page.goto(watchUrl, { waitUntil: 'networkidle2', timeout: REQUEST_TIMEOUT });
 
-    await page.waitForSelector('ytd-video-description-transcript-section-renderer button', { timeout: 10000 });
+    try {
+      await page.waitForSelector(transcriptButtonSelector, { timeout: 10000 });
+    } catch (error) {
+      throw createDescriptiveError(`Transcript not available for this video: transcript toggle button '${transcriptButtonSelector}' was not found`, error);
+    }
+
     await page.evaluate(() => {
       const button = document.querySelector('ytd-video-description-transcript-section-renderer button') as HTMLElement | null;
       button?.click();
     });
 
-    await page.waitForSelector('ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"]', { timeout: 10000 });
-    await page.waitForFunction(
-      () => document.querySelectorAll('ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] .ytwTranscriptSegmentViewModelHost').length > 0,
-      { timeout: 10000 }
-    );
+    try {
+      await page.waitForSelector(transcriptPanelSelector, { timeout: 10000 });
+    } catch (error) {
+      throw createDescriptiveError(`Transcript UI not found: transcript panel '${transcriptPanelSelector}' did not appear`, error);
+    }
+
+    try {
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length > 0,
+        { timeout: 10000 },
+        transcriptSegmentSelector
+      );
+    } catch (error) {
+      throw createDescriptiveError(`Transcript not available for this video: transcript segments '${transcriptSegmentSelector}' did not load`, error);
+    }
 
     await scrollTranscriptPanel(page);
 
     return await page.$$eval(
-      'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] .ytwTranscriptSegmentViewModelHost',
+      transcriptSegmentSelector,
       (elements) => {
         const segments = elements.map((element) => {
           const timestamp = element.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.textContent?.trim() || '';
@@ -515,7 +538,16 @@ export async function getSubtitles(options: {
   }
 
   const { availableLanguages, adChapters, metadata } = await getPageData(videoID);
-  const actualLang = selectLanguage(availableLanguages, lang, enableFallback);
+  let actualLang: string;
+  try {
+    actualLang = selectLanguage(availableLanguages, lang, enableFallback);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'No caption tracks available for this video.') {
+      throw createDescriptiveError('No caption tracks available for this video.', error);
+    }
+    throw error;
+  }
+
   const segments = await fetchTranscriptSegments(videoID, actualLang);
 
   if (segments.length === 0) {
