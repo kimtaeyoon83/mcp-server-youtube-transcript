@@ -10,7 +10,7 @@ import {
   Tool,
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getSubtitles, AdChapter, CaptionTrack } from './youtube-fetcher.js';
+import { getSubtitles, AdChapter, CaptionTrack, shutdownFetcher } from './youtube-fetcher.js';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
@@ -211,6 +211,7 @@ class YouTubeTranscriptExtractor {
 class TranscriptServer {
   private extractor: YouTubeTranscriptExtractor;
   private server: Server;
+  private stopPromise: Promise<void> | null = null;
 
   constructor() {
     this.extractor = new YouTubeTranscriptExtractor();
@@ -235,10 +236,23 @@ class TranscriptServer {
       console.error("[MCP Error]", error);
     };
 
-    process.on('SIGINT', async () => {
+    process.once('SIGINT', () => {
+      void this.handleSignal('SIGINT');
+    });
+
+    process.once('SIGTERM', () => {
+      void this.handleSignal('SIGTERM');
+    });
+  }
+
+  private async handleSignal(signal: NodeJS.Signals): Promise<void> {
+    try {
       await this.stop();
       process.exit(0);
-    });
+    } catch (error) {
+      console.error(`Error while handling ${signal}:`, error);
+      process.exit(1);
+    }
   }
 
   private setupHandlers(): void {
@@ -344,11 +358,34 @@ class TranscriptServer {
    * Stops the server
    */
   async stop(): Promise<void> {
-    try {
-      await this.server.close();
-    } catch (error) {
-      console.error('Error while stopping server:', error);
+    if (!this.stopPromise) {
+      this.stopPromise = (async () => {
+        const results = await Promise.allSettled([
+          shutdownFetcher(),
+          this.server.close()
+        ]);
+
+        const failures = results.flatMap((result, index) => {
+          if (result.status === 'fulfilled') {
+            return [];
+          }
+
+          return [{
+            step: index === 0 ? 'shutdownFetcher()' : 'server.close()',
+            reason: result.reason
+          }];
+        });
+
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures.map((failure) => failure.reason),
+            `Error while stopping server: ${failures.map((failure) => failure.step).join(', ')}`
+          );
+        }
+      })();
     }
+
+    return this.stopPromise;
   }
 }
 

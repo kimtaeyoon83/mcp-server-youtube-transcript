@@ -35,7 +35,7 @@ npx -y @smithery/cli install @kimtaeyoon83/mcp-server-youtube-transcript --clien
 - Language-specific transcript retrieval with automatic fallback
 - Optional timestamps for referencing specific moments
 - Built-in ad/sponsorship filtering (enabled by default)
-- Zero external dependencies for transcript fetching
+- Headless Chrome-backed transcript extraction that avoids brittle YouTube private API payloads
 - Detailed metadata in responses
 
 ## Configuration
@@ -70,6 +70,7 @@ npx @michaellatman/mcp-get@latest install @kimtaeyoon83/mcp-server-youtube-trans
 
 - Node.js 18 or higher
 - npm or yarn
+- Chrome or Chromium installed locally. Set `CHROME_PATH` or `PUPPETEER_EXECUTABLE_PATH` if it is not available at a standard system path.
 
 ### Setup
 
