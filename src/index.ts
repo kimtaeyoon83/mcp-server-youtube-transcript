@@ -42,15 +42,6 @@ const TOOLS: Tool[] = [
       },
       required: ["url"]
     },
-    // OutputSchema describes structuredContent format for Claude Code
-    outputSchema: {
-      type: "object",
-      properties: {
-        meta: { type: "string", description: "Title | Author | Subs | Views | Date" },
-        content: { type: "string" }
-      },
-      required: ["content"]
-    },
     annotations: {
       title: "Get Transcript",
       readOnlyHint: true,
@@ -299,16 +290,12 @@ class TranscriptServer {
             transcript += '\n\n[Note: No chapter markers found. If summarizing, please exclude any sponsored segments or ads from the summary.]';
           }
 
-          // Claude Code v2.0.21+ needs structuredContent for proper display
+          const metaHeader = `${result.metadata.title} | ${result.metadata.author} | ${result.metadata.subscriberCount} subs | ${result.metadata.viewCount} views | ${result.metadata.publishDate}`;
           return {
             content: [{
               type: "text" as const,
-              text: transcript
-            }],
-            structuredContent: {
-              meta: `${result.metadata.title} | ${result.metadata.author} | ${result.metadata.subscriberCount} subs | ${result.metadata.viewCount} views | ${result.metadata.publishDate}`,
-              content: transcript.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ')
-            }
+              text: `${metaHeader}\n\n${transcript}`
+            }]
           };
         } catch (error) {
           console.error('Transcript extraction failed:', error);
