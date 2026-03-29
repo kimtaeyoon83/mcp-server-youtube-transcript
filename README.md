@@ -119,6 +119,10 @@ The server implements robust error handling for common scenarios:
 - Language availability issues
 - Network errors
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/kimtaeyoon83-mcp-server-youtube-transcript).
+
 ## Usage Examples
 
 1. Get transcript by video URL:
