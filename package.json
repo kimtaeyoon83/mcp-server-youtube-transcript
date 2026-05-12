@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsc && shx chmod +x dist/*.js",
     "prepare": "npm run build",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "vitest run src/youtube-fetcher.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@types/node": "^20.11.24",
     "shx": "^0.3.4",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.6"
   }
 }

@@ -36,10 +36,10 @@ interface PageData {
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
 
-// TODO: These versions may need periodic updates if YouTube starts rejecting old clients
-// The ANDROID client is used to bypass YouTube's poToken A/B test enforcement
-const ANDROID_CLIENT_VERSION = '19.29.37';
-const ANDROID_USER_AGENT = `com.google.android.youtube/${ANDROID_CLIENT_VERSION} (Linux; U; Android 11) gzip`;
+// IOS client bypasses YouTube's poToken enforcement (ANDROID deprecated early 2026)
+// Update clientVersion if YouTube starts returning 400s again
+const IOS_CLIENT_VERSION = '20.10.38';
+const IOS_USER_AGENT = `com.google.ios.youtube/${IOS_CLIENT_VERSION} (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)`;
 const WEB_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DEFAULT_CLIENT_VERSION = '2.20251201.01.00'; // Fallback if not extracted from page
 
@@ -307,90 +307,82 @@ export async function getSubtitles(options: {
     }
   }
 
-  // Build request payload using ANDROID client to avoid FAILED_PRECONDITION errors
-  // The ANDROID client bypasses YouTube's A/B test for poToken enforcement
-  const params = buildParams(videoID, targetLang);
-  const payload = JSON.stringify({
-    context: {
-      client: {
-        hl: targetLang,
-        gl: 'US',
-        clientName: 'ANDROID',
-        clientVersion: ANDROID_CLIENT_VERSION,
-        androidSdkVersion: 30,
-        visitorData: visitorData
-      }
-    },
-    params: params
+  // Step 1: Get caption track URLs via player API (IOS client — get_transcript deprecated 2026)
+  const playerPayload = JSON.stringify({
+    context: { client: { clientName: 'IOS', clientVersion: IOS_CLIENT_VERSION, hl: 'en', gl: 'US' } },
+    videoId: videoID
   });
 
-  // Make API request
-  let response: string;
+  let playerResponse: string;
   try {
-    response = await httpsRequest({
+    playerResponse = await httpsRequest({
       hostname: 'www.youtube.com',
-      path: '/youtubei/v1/get_transcript?prettyPrint=false',
+      path: '/youtubei/v1/player',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': ANDROID_USER_AGENT,
-        'Origin': 'https://www.youtube.com'
+        'Content-Length': Buffer.byteLength(playerPayload),
+        'User-Agent': IOS_USER_AGENT,
       }
-    }, payload);
+    }, playerPayload);
   } catch (err) {
-    throw new Error(`Failed to fetch transcript API: ${(err as Error).message}`);
+    throw new Error(`Failed to fetch player API: ${(err as Error).message}`);
   }
 
-  // Parse response with error handling
-  let json: any;
+  let playerJson: any;
   try {
-    json = JSON.parse(response);
+    playerJson = JSON.parse(playerResponse);
   } catch (err) {
-    throw new Error(`Failed to parse YouTube API response: ${(err as Error).message}. Response preview: ${response.substring(0, 200)}`);
+    throw new Error(`Failed to parse player API response: ${(err as Error).message}`);
   }
 
-  // Check for API-level errors
-  if (json.error) {
-    const errorMsg = json.error.message || json.error.code || 'Unknown API error';
-    throw new Error(`YouTube API error: ${errorMsg}`);
+  if (playerJson?.error) {
+    throw new Error(`YouTube player API error: ${playerJson.error.message || playerJson.error.code}`);
   }
 
-  // Extract transcript segments - handle both WEB and ANDROID response formats
-  const webSegments = json?.actions?.[0]?.updateEngagementPanelAction?.content
-    ?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body
-    ?.transcriptSegmentListRenderer?.initialSegments;
-
-  const androidSegments = json?.actions?.[0]?.elementsCommand?.transformEntityCommand
-    ?.arguments?.transformTranscriptSegmentListArguments?.overwrite?.initialSegments;
-
-  const segments = webSegments || androidSegments || [];
-
-  if (segments.length === 0) {
+  // Step 2: Select caption track for target language
+  const captionTracks: any[] = playerJson?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+  if (captionTracks.length === 0) {
     throw new Error('No transcript available for this video. The video may not have captions enabled.');
   }
 
-  // Convert to TranscriptLine format
-  const lines = segments
-    .filter((seg: any) => seg?.transcriptSegmentRenderer) // Skip section headers
-    .map((seg: any) => {
-      const renderer = seg.transcriptSegmentRenderer;
+  const track = captionTracks.find((t: any) => t.languageCode === targetLang) ?? captionTracks[0];
 
-      // Handle both WEB format (snippet.runs) and ANDROID format (snippet.elementsAttributedString)
-      const webText = renderer?.snippet?.runs?.map((r: any) => r.text || '').join('');
-      const androidText = renderer?.snippet?.elementsAttributedString?.content;
-      const text = webText || androidText || '';
+  // Step 3: Fetch timedtext as JSON3
+  const timedtextUrl = new URL(track.baseUrl + '&fmt=json3');
+  let timedtextBody: string;
+  try {
+    timedtextBody = await httpsRequest({
+      hostname: timedtextUrl.hostname,
+      path: timedtextUrl.pathname + timedtextUrl.search,
+      method: 'GET',
+      headers: { 'User-Agent': WEB_USER_AGENT }
+    });
+  } catch (err) {
+    throw new Error(`Failed to fetch transcript data: ${(err as Error).message}`);
+  }
 
-      const startMs = parseInt(renderer?.startMs || '0', 10);
-      const endMs = parseInt(renderer?.endMs || '0', 10);
+  let timedtextJson: any;
+  try {
+    timedtextJson = JSON.parse(timedtextBody);
+  } catch (err) {
+    throw new Error(`Failed to parse transcript data: ${(err as Error).message}`);
+  }
 
-      return {
-        text: text,
-        start: startMs / 1000,
-        dur: (endMs - startMs) / 1000
-      };
-    })
+  // Step 4: Parse events into TranscriptLine[]
+  const events: any[] = timedtextJson?.events ?? [];
+  const lines = events
+    .filter((e: any) => e.segs) // skip non-text events (window/pen definitions)
+    .map((e: any) => ({
+      text: e.segs.map((s: any) => s.utf8 ?? '').join('').replace(/\n/g, ' ').trim(),
+      start: e.tStartMs / 1000,
+      dur: (e.dDurationMs ?? 0) / 1000,
+    }))
     .filter((line: TranscriptLine) => line.text.length > 0);
+
+  if (lines.length === 0) {
+    throw new Error('No transcript available for this video. The video may not have captions enabled.');
+  }
 
   return {
     lines,
