@@ -346,7 +346,15 @@ export async function getSubtitles(options: {
     throw new Error('No transcript available for this video. The video may not have captions enabled.');
   }
 
-  const track = captionTracks.find((t: any) => t.languageCode === targetLang) ?? captionTracks[0];
+  let track = captionTracks.find((t: any) => t.languageCode === targetLang);
+  if (!track) {
+    if (!enableFallback) {
+      throw new Error(`Language '${targetLang}' not available. Available: ${captionTracks.map(t => t.languageCode).join(', ')}`);
+    }
+    track = captionTracks[0];
+    console.error(`[youtube-fetcher] Caption track for '${targetLang}' not found in player API, using '${track.languageCode}'`);
+  }
+  const actualLang: string = track.languageCode ?? targetLang;
 
   // Step 3: Fetch timedtext as JSON3
   const timedtextUrl = new URL(track.baseUrl + '&fmt=json3');
@@ -387,7 +395,7 @@ export async function getSubtitles(options: {
   return {
     lines,
     requestedLang: lang,
-    actualLang: targetLang,
+    actualLang,
     availableLanguages,
     adChapters,
     metadata
