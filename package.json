@@ -23,7 +23,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
-    "mcp-evals": "^1.0.18"
+    "mcp-evals": "^1.0.18",
+    "twelvelabs-js": "^1.2.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
