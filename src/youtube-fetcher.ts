@@ -66,6 +66,7 @@ export interface Comment {
 interface PageData {
   visitorData: string;
   clientVersion: string;
+  apiKey: string;
   availableLanguages: CaptionTrack[];
   chapters: Chapter[];
   adChapters: AdChapter[];
@@ -75,6 +76,8 @@ interface PageData {
 }
 
 const REQUEST_TIMEOUT = 30000; // 30 seconds
+const RETRY_DELAYS = [1000, 2000]; // Retry after 1s, then 2s
+const RETRYABLE_CODES = new Set([400, 408, 429, 500, 502, 503, 504]);
 
 /**
  * Formats a number as compact string: 1234 → "1.2k", 1234567 → "1.2M"
@@ -87,11 +90,12 @@ export function formatCount(n: number): string {
 }
 
 // TODO: These versions may need periodic updates if YouTube starts rejecting old clients
-// The ANDROID client is used to bypass YouTube's poToken A/B test enforcement
-const ANDROID_CLIENT_VERSION = '19.29.37';
+// The ANDROID client is used against /youtubei/v1/player because the caption track URLs
+// it returns are served without poToken enforcement (WEB player responses are not)
+const ANDROID_CLIENT_VERSION = '20.10.38';
 const ANDROID_USER_AGENT = `com.google.android.youtube/${ANDROID_CLIENT_VERSION} (Linux; U; Android 11) gzip`;
 const WEB_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const DEFAULT_CLIENT_VERSION = '2.20251201.01.00'; // Fallback if not extracted from page
+const DEFAULT_CLIENT_VERSION = '2.20260301.00.00'; // Fallback if not extracted from page
 
 /**
  * Encodes a number as a protobuf varint
@@ -107,41 +111,102 @@ function encodeVarint(value: number): number[] {
   return bytes;
 }
 
+interface PlayerCaptionTrack extends CaptionTrack {
+  baseUrl: string;
+}
+
 /**
- * Builds the protobuf-encoded params for the transcript API
- * @param isAsr - true for auto-generated captions (ASR), false for uploaded/manual captions
+ * Fetches caption track metadata (including download URLs) from the InnerTube player API.
+ * Uses the ANDROID client: its caption baseUrls are not gated behind poToken.
  */
-function buildParams(videoId: string, lang: string = 'en', isAsr: boolean = true): string {
-  // Inner protobuf: language params
-  // For ASR captions: includes "asr" field
-  // For uploaded captions: omits "asr" field
-  const innerParts: number[] = isAsr
-    ? [
-        0x0a, 0x03, ...Buffer.from('asr'),           // Field 1, "asr" (only for auto-generated)
-        0x12, ...encodeVarint(lang.length), ...Buffer.from(lang),  // Field 2, language code
-        0x1a, 0x00                                    // Field 3, empty
-      ]
-    : [
-        0x12, ...encodeVarint(lang.length), ...Buffer.from(lang),  // Field 2, language code
-        0x1a, 0x00                                    // Field 3, empty
-      ];
-  const innerBuf = Buffer.from(innerParts);
-  const innerB64 = innerBuf.toString('base64');
-  const innerEncoded = encodeURIComponent(innerB64);
+async function getPlayerCaptionTracks(videoId: string, apiKey: string): Promise<PlayerCaptionTrack[]> {
+  const payload = JSON.stringify({
+    context: {
+      client: {
+        hl: 'en',
+        gl: 'US',
+        clientName: 'ANDROID',
+        clientVersion: ANDROID_CLIENT_VERSION,
+        androidSdkVersion: 30
+      }
+    },
+    videoId: videoId
+  });
 
-  // Outer protobuf
-  const panelName = 'engagement-panel-searchable-transcript-search-panel';
-  const outerParts: number[] = [
-    0x0a, ...encodeVarint(videoId.length), ...Buffer.from(videoId),      // Field 1, video ID
-    0x12, ...encodeVarint(innerEncoded.length), ...Buffer.from(innerEncoded), // Field 2, language params
-    0x18, 0x01,                                          // Field 3, value 1
-    0x2a, ...encodeVarint(panelName.length), ...Buffer.from(panelName),  // Field 5, panel name
-    0x30, 0x01,                                          // Field 6, value 1
-    0x38, 0x01,                                          // Field 7, value 1
-    0x40, 0x01                                           // Field 8, value 1
-  ];
+  const path = apiKey
+    ? `/youtubei/v1/player?key=${apiKey}&prettyPrint=false`
+    : '/youtubei/v1/player?prettyPrint=false';
 
-  return Buffer.from(outerParts).toString('base64');
+  const response = await httpsRequest({
+    hostname: 'www.youtube.com',
+    path,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload),
+      'User-Agent': ANDROID_USER_AGENT
+    }
+  }, payload);
+
+  let json: any;
+  try {
+    json = JSON.parse(response);
+  } catch (err) {
+    throw new Error(`Failed to parse player API response: ${(err as Error).message}`);
+  }
+  if (json.error) {
+    throw new Error(`YouTube player API error: ${json.error.message || json.error.code}`);
+  }
+
+  const status = json?.playabilityStatus?.status;
+  if (status && status !== 'OK') {
+    const reason = json?.playabilityStatus?.reason || status;
+    console.error(`[youtube-fetcher] Player API playability: ${status} (${reason})`);
+  }
+
+  const tracks = json?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+  return tracks
+    .filter((t: any) => t.baseUrl && t.languageCode)
+    .map((t: any) => ({
+      languageCode: t.languageCode,
+      name: t.name?.simpleText || t.name?.runs?.[0]?.text || t.languageCode,
+      isAutoGenerated: t.kind === 'asr',
+      baseUrl: t.baseUrl
+    }));
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(parseInt(code, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => String.fromCodePoint(parseInt(code, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Parses timedtext XML (<text start="1.36" dur="2.8">...</text>) into transcript lines.
+ */
+function parseTimedTextXml(xml: string): TranscriptLine[] {
+  const lines: TranscriptLine[] = [];
+  const textRegex = /<text\b([^>]*)>([\s\S]*?)<\/text>/g;
+  let match: RegExpExecArray | null;
+  while ((match = textRegex.exec(xml)) !== null) {
+    const attrs = match[1];
+    const start = parseFloat(attrs.match(/start="([\d.]+)"/)?.[1] || '0');
+    const dur = parseFloat(attrs.match(/dur="([\d.]+)"/)?.[1] || '0');
+    // Strip inline markup before decoding so entity-encoded '<' in speech survives;
+    // decode twice because timedtext double-encodes (apostrophe arrives as &amp;#39;)
+    const text = decodeXmlEntities(decodeXmlEntities(match[2].replace(/<[^>]+>/g, '')))
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (text.length > 0) {
+      lines.push({ text, start, dur });
+    }
+  }
+  return lines;
 }
 
 /**
@@ -199,13 +264,11 @@ function buildCommentsParams(videoId: string, sortBy: 0 | 1 = 0): string {
 }
 
 /**
- * Makes an HTTPS request and returns the response body
- * Includes timeout and HTTP status code validation
+ * Makes a single HTTPS request and returns the response body
  */
-function httpsRequest(options: https.RequestOptions, data?: string): Promise<string> {
+function httpsRequestOnce(options: https.RequestOptions, data?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = https.request({ ...options, timeout: REQUEST_TIMEOUT }, (res) => {
-      // Validate HTTP status code
       if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
         reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage || 'Unknown error'}`));
         return;
@@ -228,6 +291,29 @@ function httpsRequest(options: https.RequestOptions, data?: string): Promise<str
     if (data) req.write(data);
     req.end();
   });
+}
+
+/**
+ * HTTPS request with automatic retry for transient errors (400, 408, 429, 5xx)
+ */
+async function httpsRequest(options: https.RequestOptions, data?: string): Promise<string> {
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    try {
+      return await httpsRequestOnce(options, data);
+    } catch (err) {
+      const message = (err as Error).message;
+      const statusMatch = message.match(/^HTTP (\d+):/);
+      const isRetryable = statusMatch && RETRYABLE_CODES.has(Number(statusMatch[1]));
+
+      if (isRetryable && attempt < RETRY_DELAYS.length) {
+        console.error(`[httpsRequest] ${options.path} — ${message}, retrying in ${RETRY_DELAYS[attempt]}ms (attempt ${attempt + 1}/${RETRY_DELAYS.length})`);
+        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('httpsRequest: exhausted retries');
 }
 
 /**
@@ -284,6 +370,10 @@ async function getPageData(videoId: string): Promise<PageData> {
   // Extract client version (format: "2.YYYYMMDD.XX.XX")
   const versionMatch = html.match(/"clientVersion":"([\d.]+)"/);
   const clientVersion = versionMatch?.[1] || DEFAULT_CLIENT_VERSION;
+
+  // Extract InnerTube API key (used for player API calls)
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":\s*"([a-zA-Z0-9_-]+)"/);
+  const apiKey = apiKeyMatch?.[1] || '';
 
   // Extract available caption tracks
   const availableLanguages: CaptionTrack[] = [];
@@ -412,7 +502,7 @@ async function getPageData(videoId: string): Promise<PageData> {
   // Detect live streams
   const isLive = html.includes('"isLiveContent":true') || html.includes('"isLive":true');
 
-  return { visitorData, clientVersion, availableLanguages, chapters, adChapters, metadata, isLive };
+  return { visitorData, clientVersion, apiKey, availableLanguages, chapters, adChapters, metadata, isLive };
 }
 
 export interface SubtitleResult {
@@ -454,256 +544,63 @@ export async function getSubtitles(options: {
     throw new Error('Invalid video ID: must be a non-empty string');
   }
 
-  // Get page data (visitor data needed for API authentication)
+  // Get page data (metadata, chapters, live status; caption list fallback)
   console.error(`[youtube-fetcher] Fetching page data for video: ${videoID}`);
-  const { visitorData, availableLanguages, chapters, adChapters, metadata, isLive } = await getPageData(videoID);
-  console.error(`[youtube-fetcher] Page data: title="${metadata.title}", visitorData=${visitorData ? 'present' : 'MISSING'}, availableLanguages=[${availableLanguages.map(l => l.languageCode).join(',')}]`);
+  const { apiKey, availableLanguages: pageLanguages, chapters, adChapters, metadata, isLive } = await getPageData(videoID);
+  console.error(`[youtube-fetcher] Page data: title="${metadata.title}", apiKey=${apiKey ? 'present' : 'MISSING'}`);
 
-  // Determine which language to use and whether it's ASR
-  let targetLang = lang;
-  let isAsr = true; // Default to ASR for backwards compatibility
-
-  if (availableLanguages.length > 0) {
-    const requestedTrack = availableLanguages.find(t => t.languageCode === lang);
-    const hasRequestedLang = !!requestedTrack;
-
-    if (!hasRequestedLang && enableFallback) {
-      // Try English first
-      const englishTrack = availableLanguages.find(t => t.languageCode === 'en');
-      if (englishTrack) {
-        targetLang = 'en';
-        isAsr = englishTrack.isAutoGenerated;
-        console.error(`[youtube-fetcher] Language '${lang}' not available, falling back to 'en' (isAsr=${isAsr})`);
-      } else {
-        // Use first available
-        targetLang = availableLanguages[0].languageCode;
-        isAsr = availableLanguages[0].isAutoGenerated;
-        console.error(`[youtube-fetcher] Language '${lang}' not available, falling back to '${targetLang}' (isAsr=${isAsr})`);
-      }
-    } else if (!hasRequestedLang) {
-      throw new Error(`Language '${lang}' not available. Available: ${availableLanguages.map(t => t.languageCode).join(', ')}`);
-    } else {
-      isAsr = requestedTrack!.isAutoGenerated;
-    }
+  // Fetch caption tracks (with download URLs) from the player API
+  let playerTracks: PlayerCaptionTrack[];
+  try {
+    playerTracks = await getPlayerCaptionTracks(videoID, apiKey);
+  } catch (err) {
+    throw new TranscriptFetchError(`Failed to fetch caption tracks: ${(err as Error).message}`, isLive, metadata);
   }
+  console.error(`[youtube-fetcher] Player API caption tracks: [${playerTracks.map(t => t.languageCode + (t.isAutoGenerated ? '(asr)' : '')).join(',')}]`);
 
-  console.error(`[youtube-fetcher] Building params for lang=${targetLang}, isAsr=${isAsr}`);
+  const availableLanguages: CaptionTrack[] = playerTracks.length > 0
+    ? playerTracks.map(({ languageCode, name, isAutoGenerated }) => ({ languageCode, name, isAutoGenerated }))
+    : pageLanguages;
 
-  // Build params and try multiple clients until we get segments
-  const params = buildParams(videoID, targetLang, isAsr);
-
-  const androidPayload = JSON.stringify({
-    context: {
-      client: {
-        hl: targetLang,
-        gl: 'US',
-        clientName: 'ANDROID',
-        clientVersion: ANDROID_CLIENT_VERSION,
-        androidSdkVersion: 30,
-        visitorData: visitorData
-      }
-    },
-    params: params
-  });
-
-  // Try TVHTML5 (TV app) which often has different API behavior
-  const tvPayload = JSON.stringify({
-    context: {
-      client: {
-        hl: targetLang,
-        gl: 'US',
-        clientName: 'TVHTML5',
-        clientVersion: '7.20211222.00.00',
-        visitorData: visitorData
-      }
-    },
-    params: params
-  });
-
-  // Try iOS client
-  const iosPayload = JSON.stringify({
-    context: {
-      client: {
-        hl: targetLang,
-        gl: 'US',
-        clientName: 'IOS',
-        clientVersion: '19.29.1',
-        visitorData: visitorData
-      }
-    },
-    params: params
-  });
-
-  const payloads = [
-    { name: 'ANDROID', payload: androidPayload, userAgent: ANDROID_USER_AGENT },
-    { name: 'IOS', payload: iosPayload, userAgent: 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)' },
-    { name: 'TVHTML5', payload: tvPayload, userAgent: 'Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) 80.0.3987.149/6.0 TV Safari/537.36' }
-  ];
-
-  // Try each client until we get segments
-  let response: string = '';
-  let json: any = null;
-  let segments: any[] = [];
-  let lastError: Error | null = null;
-
-  for (const { name, payload, userAgent } of payloads) {
-    try {
-      console.error(`[youtube-fetcher] Trying ${name} client...`);
-      response = await httpsRequest({
-        hostname: 'www.youtube.com',
-        path: '/youtubei/v1/get_transcript?prettyPrint=false',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-          'User-Agent': userAgent,
-          'Origin': 'https://www.youtube.com'
-        }
-      }, payload);
-
-      // Parse response
-      try {
-        json = JSON.parse(response);
-      } catch (err) {
-        console.error(`[youtube-fetcher] ${name} client: failed to parse response`);
-        continue;
-      }
-
-      // Check for API-level errors
-      if (json.error) {
-        console.error(`[youtube-fetcher] ${name} client: API error: ${json.error.message || json.error.code}`);
-        continue;
-      }
-
-      // Extract transcript segments - handle both WEB and ANDROID response formats
-      const webSegments = json?.actions?.[0]?.updateEngagementPanelAction?.content
-        ?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body
-        ?.transcriptSegmentListRenderer?.initialSegments;
-
-      const androidSegments = json?.actions?.[0]?.elementsCommand?.transformEntityCommand
-        ?.arguments?.transformTranscriptSegmentListArguments?.overwrite?.initialSegments;
-
-      segments = webSegments || androidSegments || [];
-      console.error(`[youtube-fetcher] ${name} client: found ${segments.length} segments`);
-
-      if (segments.length > 0) {
-        break; // Found segments, stop trying
-      }
-    } catch (err) {
-      lastError = err as Error;
-      console.error(`[youtube-fetcher] ${name} client error: ${(err as Error).message}`);
-    }
-  }
-
-  if (!json) {
-    throw new TranscriptFetchError(`Failed to fetch transcript API: ${lastError?.message || 'Unknown error'}`, isLive, metadata);
-  }
-
-  // If no segments found, check for continuation key in frameworkUpdates
-  if (segments.length === 0) {
-    console.error(`[youtube-fetcher] No segments in initial response, checking for continuation key...`);
-    const fw = json?.frameworkUpdates;
-    const mutations = fw?.entityBatchUpdate?.mutations || [];
-
-    for (const mut of mutations) {
-      const tsde = mut.payload?.transcriptSegmentsDataEntity;
-      if (tsde?.key) {
-        console.error(`[youtube-fetcher] Found continuation key: ${tsde.key}`);
-
-        // Make a follow-up request with the continuation key
-        const continuationPayload = JSON.stringify({
-          context: {
-            client: {
-              hl: targetLang,
-              gl: 'US',
-              clientName: 'ANDROID',
-              clientVersion: ANDROID_CLIENT_VERSION,
-              androidSdkVersion: 30,
-              visitorData: visitorData
-            }
-          },
-          continuation: tsde.key
-        });
-
-        try {
-          console.error(`[youtube-fetcher] Fetching segments with continuation key...`);
-          const contResponse = await httpsRequest({
-            hostname: 'www.youtube.com',
-            path: '/youtubei/v1/get_transcript?prettyPrint=false',
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Content-Length': Buffer.byteLength(continuationPayload),
-              'User-Agent': ANDROID_USER_AGENT,
-              'Origin': 'https://www.youtube.com'
-            }
-          }, continuationPayload);
-
-          let contJson: any;
-          try {
-            contJson = JSON.parse(contResponse);
-          } catch (parseErr) {
-            console.error(`[getSubtitles] Failed to parse continuation response: ${(parseErr as Error).message}`);
-            break; // Fall back to segments already collected
-          }
-          console.error(`[youtube-fetcher] Continuation response keys: ${JSON.stringify(Object.keys(contJson))}`);
-
-          // Try to extract segments from continuation response
-          const contWebSegments = contJson?.actions?.[0]?.updateEngagementPanelAction?.content
-            ?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body
-            ?.transcriptSegmentListRenderer?.initialSegments;
-
-          const contAndroidSegments = contJson?.actions?.[0]?.elementsCommand?.transformEntityCommand
-            ?.arguments?.transformTranscriptSegmentListArguments?.overwrite?.initialSegments;
-
-          // Also check frameworkUpdates in continuation response
-          const contMutations = contJson?.frameworkUpdates?.entityBatchUpdate?.mutations || [];
-          let mutationSegments: any[] = [];
-          for (const contMut of contMutations) {
-            const segData = contMut.payload?.transcriptSegmentRenderer;
-            if (segData) {
-              mutationSegments.push({ transcriptSegmentRenderer: segData });
-            }
-          }
-
-          segments = contWebSegments || contAndroidSegments || mutationSegments || [];
-          console.error(`[youtube-fetcher] Continuation found ${segments.length} segments`);
-
-          if (segments.length > 0) {
-            break;
-          }
-        } catch (err) {
-          console.error(`[youtube-fetcher] Continuation request failed: ${(err as Error).message}`);
-        }
-      }
-    }
-  }
-
-  if (segments.length === 0) {
+  if (playerTracks.length === 0) {
     throw new TranscriptFetchError('No transcript available for this video. The video may not have captions enabled.', isLive, metadata);
   }
 
-  // Convert to TranscriptLine format
-  const lines = segments
-    .filter((seg: any) => seg?.transcriptSegmentRenderer) // Skip section headers
-    .map((seg: any) => {
-      const renderer = seg.transcriptSegmentRenderer;
+  // Select track: requested language, else English, else first available
+  let track = playerTracks.find(t => t.languageCode === lang);
+  if (!track) {
+    if (!enableFallback) {
+      throw new Error(`Language '${lang}' not available. Available: ${playerTracks.map(t => t.languageCode).join(', ')}`);
+    }
+    track = playerTracks.find(t => t.languageCode === 'en') || playerTracks[0];
+    console.error(`[youtube-fetcher] Language '${lang}' not available, falling back to '${track.languageCode}' (isAsr=${track.isAutoGenerated})`);
+  }
+  const targetLang = track.languageCode;
 
-      // Handle both WEB format (snippet.runs) and ANDROID format (snippet.elementsAttributedString)
-      const webText = renderer?.snippet?.runs?.map((r: any) => r.text || '').join('');
-      const androidText = renderer?.snippet?.elementsAttributedString?.content;
-      const text = webText || androidText || '';
+  // Caption URLs carrying exp=xpe are gated behind a proof-of-origin token
+  if (track.baseUrl.includes('&exp=xpe')) {
+    throw new TranscriptFetchError('YouTube requires a proof-of-origin token (poToken) for caption downloads from this IP. Transcript cannot be retrieved.', isLive, metadata);
+  }
 
-      const startMs = parseInt(renderer?.startMs || '0', 10);
-      const endMs = parseInt(renderer?.endMs || '0', 10);
+  // Download and parse the timedtext XML
+  const trackUrl = new URL(track.baseUrl.replace('&fmt=srv3', ''));
+  console.error(`[youtube-fetcher] Fetching timedtext for lang=${targetLang} (isAsr=${track.isAutoGenerated})`);
+  const xml = await httpsRequest({
+    hostname: trackUrl.hostname,
+    path: trackUrl.pathname + trackUrl.search,
+    method: 'GET',
+    headers: {
+      'User-Agent': ANDROID_USER_AGENT,
+      'Accept-Language': 'en-US'
+    }
+  });
 
-      return {
-        text: text,
-        start: startMs / 1000,
-        dur: (endMs - startMs) / 1000
-      };
-    })
-    .filter((line: TranscriptLine) => line.text.length > 0);
+  const lines = parseTimedTextXml(xml);
+  console.error(`[youtube-fetcher] Parsed ${lines.length} transcript lines`);
+
+  if (lines.length === 0) {
+    throw new TranscriptFetchError('No transcript available for this video. The video may not have captions enabled.', isLive, metadata);
+  }
 
   // commentCount is already extracted from the page HTML in getPageData
   // No need for a separate API call that re-fetches the entire page
