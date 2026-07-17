@@ -7,7 +7,6 @@
   "homepage": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
   "bugs": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript/issues",
   "access": "public",
-  "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "bin": {
@@ -22,11 +21,11 @@
     "watch": "tsc --watch"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.9.0",
-    "mcp-evals": "^1.0.18"
+    "@modelcontextprotocol/sdk": "^1.11.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
+    "mcp-evals": "^1.0.18",
     "shx": "^0.3.4",
     "typescript": "^5.6.2"
   }

@@ -5,7 +5,7 @@
 
 [![smithery badge](https://smithery.ai/badge/@kimtaeyoon83/mcp-server-youtube-transcript)](https://smithery.ai/server/@kimtaeyoon83/mcp-server-youtube-transcript)
 
-A Model Context Protocol server that enables retrieval of transcripts from YouTube videos. This server provides direct access to video captions and subtitles through a simple interface.
+A Model Context Protocol server that enables retrieval of transcripts, live chat, and comments from YouTube videos. This server provides direct access to video captions, subtitles, live stream chat, and community engagement through a simple interface.
 
 <a href="https://glama.ai/mcp/servers/z429kk3te7"><img width="380" height="200" src="https://glama.ai/mcp/servers/z429kk3te7/badge" alt="mcp-server-youtube-transcript MCP server" /></a>
 
@@ -22,21 +22,44 @@ npx -y @smithery/cli install @kimtaeyoon83/mcp-server-youtube-transcript --clien
 ### Tools
 
 - **get_transcript**
-  - Extract transcripts from YouTube videos
+  - Extract transcripts from YouTube videos with inline chapter markers, metadata, and optional comments
   - Inputs:
     - `url` (string, required): YouTube video URL, Shorts URL, or video ID
-    - `lang` (string, optional, default: "en"): Language code for transcript (e.g., 'ko', 'en'). Automatically falls back to available languages if requested language is not found.
-    - `include_timestamps` (boolean, optional, default: false): Include timestamps in output (e.g., '[0:05] text')
-    - `strip_ads` (boolean, optional, default: true): Filter out sponsorships, ads, and promotional content from transcript based on chapter markers
+    - `lang` (string, optional, default: "en"): Language code for transcript. Automatically falls back to available languages if requested language is not found.
+    - `include_timestamps` (boolean, optional, default: false): Include per-line timestamps (only when no chapters are available; chapter timestamps are always shown)
+    - `strip_ads` (boolean, optional, default: true): Filter out sponsorships, ads, and promotional content based on chapter markers
+    - `include_chapters` (boolean, optional, default: true): Include chapter markers inline with the transcript as section dividers with timestamps
+    - `include_comments` (number, optional, default: 0): Number of top comments to fetch alongside the transcript (0 = disabled)
+    - `comments_only` (boolean, optional, default: false): Fetch only comments, skip transcript. Uses `include_comments` as the limit if set (> 0), otherwise defaults to 500
+  - Auto-detects live streams and redirects to live chat with background streaming
+
+- **get_live_chat**
+  - Connect to YouTube live stream chat with background polling and message buffering
+  - Inputs:
+    - `url` (string, required): YouTube live stream URL or video ID
+    - `stream` (boolean, optional, default: false): Enable background streaming mode for continuous polling
+    - `continuation` (string, optional): Continuation token for manual polling to resume from a specific chat position (non-streaming mode only)
+
+- **stop_live_chat**
+  - Stop background live chat streaming for a video
+  - Inputs:
+    - `url` (string, required): YouTube live stream URL or video ID
+
+- **list_live_streams**
+  - List all active background live chat streams with stats (no inputs required)
 
 ## Key Features
 
-- Support for multiple video URL formats (including YouTube Shorts)
+- **Inline Chapter Integration** — When chapters are available, they appear as `--- [mm:ss] Title ---` section dividers directly in the transcript, providing structural timestamps without per-line noise
+- **Live Stream Auto-Detection** — Calling `get_transcript` on a live stream automatically redirects to live chat with background streaming
+- **Live Chat Streaming** — Background polling with message buffering, deduplication, and visitor data tracking
+- **Comments Integration** — Fetch top comments alongside transcripts, or use `comments_only` mode for comment-focused analysis
+- **Rich Metadata** — Title, author, duration, subscriber count, view count, publish date, and comment count in every response
+- **Ad/Sponsorship Filtering** — Automatically strips sponsored segments based on chapter markers (enabled by default)
+- Support for multiple video URL formats (standard, Shorts, short links, embed URLs)
 - Language-specific transcript retrieval with automatic fallback
-- Optional timestamps for referencing specific moments
-- Built-in ad/sponsorship filtering (enabled by default)
 - Zero external dependencies for transcript fetching
-- Detailed metadata in responses
+- Tool annotations for improved LLM tool selection
 
 ## Configuration
 
@@ -57,11 +80,11 @@ To use with Claude Desktop, add this server configuration:
 
 [mcp-get](https://github.com/michaellatman/mcp-get) A command-line tool for installing and managing Model Context Protocol (MCP) servers.
 
-```shell 
+```shell
 npx @michaellatman/mcp-get@latest install @kimtaeyoon83/mcp-server-youtube-transcript
 ```
 
-## Awesome-mcp-servers 
+## Awesome-mcp-servers
 [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers) A curated list of awesome Model Context Protocol (MCP) servers.
 
 ## Development
@@ -118,33 +141,20 @@ The server implements robust error handling for common scenarios:
 - Unavailable transcripts
 - Language availability issues
 - Network errors
+- Live stream detection and fallback
+- Malformed API responses
 
 ## Usage Examples
 
-1. Get transcript by video URL:
+1. Get transcript with inline chapters:
 ```typescript
 await server.callTool("get_transcript", {
-  url: "https://www.youtube.com/watch?v=VIDEO_ID",
-  lang: "en"
+  url: "https://www.youtube.com/watch?v=VIDEO_ID"
 });
 ```
+Output includes chapter markers like `--- [2:45] Main Topic ---` as section dividers with flowing text between them.
 
-2. Get transcript by video ID:
-```typescript
-await server.callTool("get_transcript", {
-  url: "VIDEO_ID",
-  lang: "ko"
-});
-```
-
-3. Get transcript from YouTube Shorts:
-```typescript
-await server.callTool("get_transcript", {
-  url: "https://www.youtube.com/shorts/VIDEO_ID"
-});
-```
-
-4. Get transcript with timestamps:
+2. Get transcript with per-line timestamps (for videos without chapters):
 ```typescript
 await server.callTool("get_transcript", {
   url: "VIDEO_ID",
@@ -152,15 +162,53 @@ await server.callTool("get_transcript", {
 });
 ```
 
-5. Get raw transcript without ad filtering:
+3. Get transcript with top comments:
 ```typescript
 await server.callTool("get_transcript", {
   url: "VIDEO_ID",
-  strip_ads: false
+  include_comments: 50
 });
 ```
 
-6. How to Extract YouTube Subtitles in Claude Desktop App
+4. Get only comments (no transcript):
+```typescript
+await server.callTool("get_transcript", {
+  url: "VIDEO_ID",
+  comments_only: true
+});
+```
+
+5. Get transcript from YouTube Shorts:
+```typescript
+await server.callTool("get_transcript", {
+  url: "https://www.youtube.com/shorts/VIDEO_ID"
+});
+```
+
+6. Connect to live stream chat:
+```typescript
+await server.callTool("get_live_chat", {
+  url: "https://www.youtube.com/watch?v=LIVE_VIDEO_ID",
+  stream: true
+});
+```
+
+7. Check for new live chat messages:
+```typescript
+await server.callTool("get_live_chat", {
+  url: "LIVE_VIDEO_ID",
+  stream: true
+});
+```
+
+8. Stop live chat streaming:
+```typescript
+await server.callTool("stop_live_chat", {
+  url: "LIVE_VIDEO_ID"
+});
+```
+
+9. How to Extract YouTube Subtitles in Claude Desktop App
 ```
 chat: https://youtu.be/ODaHJzOyVCQ?si=aXkJgso96Deri0aB Extract subtitles
 ```
