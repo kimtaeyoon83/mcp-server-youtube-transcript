@@ -29,6 +29,15 @@ npx -y @smithery/cli install @kimtaeyoon83/mcp-server-youtube-transcript --clien
     - `include_timestamps` (boolean, optional, default: false): Include timestamps in output (e.g., '[0:05] text')
     - `strip_ads` (boolean, optional, default: true): Filter out sponsorships, ads, and promotional content from transcript based on chapter markers
 
+- **analyze_video** (optional, requires a TwelveLabs API key)
+  - Analyze a video with [TwelveLabs](https://twelvelabs.io) Pegasus, a video-understanding model. Unlike `get_transcript`, this reasons over what is *shown* on screen, so it produces useful summaries and answers even for videos with little or no speech (demos, gameplay, b-roll, music videos).
+  - Inputs:
+    - `url` (string, required): A publicly reachable **direct video URL** (e.g. an `.mp4`/`.mov`/`.webm` link or a pre-signed URL). TwelveLabs fetches the file server-side, so a YouTube watch page URL will not work — it serves HTML, not a raw video stream.
+    - `prompt` (string, optional): Instruction or question for the model (e.g. `"Summarize this video in 3 sentences"` or `"What products are shown?"`). Defaults to a general summary.
+    - `model` (string, optional, default: `"pegasus1.2"`): Pegasus model to use (`"pegasus1.2"` or `"pegasus1.5"`).
+    - `max_tokens` (number, optional, default: 2048): Maximum response length in tokens.
+  - Requires the `TWELVELABS_API_KEY` environment variable. The transcript tool works without it; analysis is fully opt-in. Grab a free key at [twelvelabs.io](https://twelvelabs.io) — there's a generous free tier.
+
 ## Key Features
 
 - Support for multiple video URL formats (including YouTube Shorts)
@@ -48,6 +57,22 @@ To use with Claude Desktop, add this server configuration:
     "youtube-transcript": {
       "command": "npx",
       "args": ["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"]
+    }
+  }
+}
+```
+
+To enable the optional `analyze_video` tool, add your TwelveLabs API key:
+
+```json
+{
+  "mcpServers": {
+    "youtube-transcript": {
+      "command": "npx",
+      "args": ["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
+      "env": {
+        "TWELVELABS_API_KEY": "your-twelvelabs-api-key"
+      }
     }
   }
 }

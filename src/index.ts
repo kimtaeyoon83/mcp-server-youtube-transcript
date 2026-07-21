@@ -11,6 +11,7 @@ import {
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getSubtitles, AdChapter, CaptionTrack } from './youtube-fetcher.js';
+import { analyzeVideo, PegasusModel } from './twelvelabs-analyzer.js';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
@@ -53,6 +54,49 @@ const TOOLS: Tool[] = [
     },
     annotations: {
       title: "Get Transcript",
+      readOnlyHint: true,
+      openWorldHint: true,
+    },
+  },
+  {
+    name: "analyze_video",
+    description: "Analyze a video with TwelveLabs Pegasus (video-understanding model) to generate a summary or answer a question. Unlike get_transcript, this reasons over what is shown on screen, so it works for videos with little or no speech. Requires a TWELVELABS_API_KEY and a publicly reachable direct video URL (e.g. .mp4/.mov/.webm); a YouTube watch page URL is NOT a direct media file and will not work.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "Publicly reachable direct video URL (e.g. an .mp4/.mov/.webm link or pre-signed URL). Not a YouTube watch page."
+        },
+        prompt: {
+          type: "string",
+          description: "Instruction or question for the model (e.g. 'Summarize this video in 3 sentences' or 'What products are shown?'). Default: a general summary.",
+          default: "Summarize this video, highlighting the main topic, key events, and conclusion."
+        },
+        model: {
+          type: "string",
+          enum: ["pegasus1.2", "pegasus1.5"],
+          description: "Pegasus model to use. Default: pegasus1.2",
+          default: "pegasus1.2"
+        },
+        max_tokens: {
+          type: "number",
+          description: "Maximum response length in tokens (2-4096 for pegasus1.2). Default: 2048",
+          default: 2048
+        }
+      },
+      required: ["url"]
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        meta: { type: "string", description: "Model | finish reason" },
+        content: { type: "string", description: "Generated analysis text" }
+      },
+      required: ["content"]
+    },
+    annotations: {
+      title: "Analyze Video (TwelveLabs Pegasus)",
       readOnlyHint: true,
       openWorldHint: true,
     },
@@ -320,6 +364,67 @@ class TranscriptServer {
           throw new McpError(
             ErrorCode.InternalError,
             `Failed to process transcript: ${(error as Error).message}`
+          );
+        }
+      }
+
+      case "analyze_video": {
+        const {
+          url: input,
+          prompt = "Summarize this video, highlighting the main topic, key events, and conclusion.",
+          model = "pegasus1.2",
+          max_tokens = 2048,
+        } = args;
+
+        if (!input || typeof input !== 'string') {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            'URL parameter is required and must be a string'
+          );
+        }
+        if (typeof prompt !== 'string') {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            'Prompt must be a string'
+          );
+        }
+        if (model !== 'pegasus1.2' && model !== 'pegasus1.5') {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Invalid model '${model}'. Must be 'pegasus1.2' or 'pegasus1.5'.`
+          );
+        }
+
+        try {
+          console.log(`Analyzing video with TwelveLabs ${model}: ${input}`);
+          const result = await analyzeVideo({
+            url: input,
+            prompt,
+            model: model as PegasusModel,
+            maxTokens: typeof max_tokens === 'number' ? max_tokens : undefined,
+          });
+          console.log(`Analysis complete (${result.text.length} chars, finish: ${result.finishReason ?? 'n/a'})`);
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: result.text
+            }],
+            structuredContent: {
+              meta: `${result.model}${result.finishReason ? ` | ${result.finishReason}` : ''}`,
+              content: result.text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ')
+            }
+          };
+        } catch (error) {
+          console.error('Video analysis failed:', error);
+
+          if (error instanceof McpError) {
+            throw error;
+          }
+
+          throw new McpError(
+            ErrorCode.InternalError,
+            `Failed to analyze video: ${(error as Error).message}`
           );
         }
       }
