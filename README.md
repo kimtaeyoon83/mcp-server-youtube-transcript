@@ -3,7 +3,7 @@
 # YouTube Transcript Server
 [![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/kimtaeyoon83/mcp-server-youtube-transcript)](https://archestra.ai/mcp-catalog/kimtaeyoon83__mcp-server-youtube-transcript)
 
-[![smithery badge](https://smithery.ai/badge/@kimtaeyoon83/mcp-server-youtube-transcript)](https://smithery.ai/server/@kimtaeyoon83/mcp-server-youtube-transcript)
+[![Listed on Skillselion](https://skillselion.com/badge/mcp/tool/io.github.kimtaeyoon83/mcp-server-youtube-transcript.svg)](https://skillselion.com/mcp/tool/io.github.kimtaeyoon83/mcp-server-youtube-transcript)
 
 A Model Context Protocol server that enables retrieval of transcripts from YouTube videos. This server provides direct access to video captions and subtitles through a simple interface.
 
