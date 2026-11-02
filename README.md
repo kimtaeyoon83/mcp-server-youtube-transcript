@@ -78,6 +78,22 @@ To enable the optional `analyze_video` tool, add your TwelveLabs API key:
 }
 ```
 
+If YouTube blocks your network (HTTP 429, or empty transcripts from a cloud server, VPN or office IP), you can set an Apify token. A transcript fetch that fails is then retried once through the [YouTube Transcripts](https://apify.com/johnvc/YoutubeTranscripts) Actor on Apify, billed to your Apify account (about $0.003 per transcript; failures are not charged). Without the token nothing changes.
+
+```json
+{
+  "mcpServers": {
+    "youtube-transcript": {
+      "command": "npx",
+      "args": ["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
+      "env": {
+        "APIFY_TOKEN": "your-apify-token"
+      }
+    }
+  }
+}
+```
+
 ## Install via tool
 
 [mcp-get](https://github.com/michaellatman/mcp-get) A command-line tool for installing and managing Model Context Protocol (MCP) servers.

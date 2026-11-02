@@ -11,6 +11,7 @@ import {
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getSubtitles, AdChapter, CaptionTrack } from './youtube-fetcher.js';
+import { apifyFallback } from './apify-fallback.js';
 import { analyzeVideo, PegasusModel } from './twelvelabs-analyzer.js';
 
 // Define tool configurations
@@ -187,7 +188,7 @@ class YouTubeTranscriptExtractor {
         videoID: videoId,
         lang: lang,
         enableFallback: true,
-      });
+      }).catch(error => apifyFallback(error, { videoID: videoId, lang }));
 
       let lines = result.lines;
       let adsStripped = 0;
